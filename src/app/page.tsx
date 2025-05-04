@@ -1,4 +1,5 @@
 
+
 'use client';
 
 import * as React from 'react';
@@ -77,9 +78,13 @@ const findChunkInfo = (
         if (wordsSinceLastPunctuation >= targetWordCount * 2 && punctuationFound !== 'sentence' && punctuationFound !== 'clause') {
             currentTargetWordCount = Math.min(targetWordCount + maxWordExtension, targetWordCount * 2); // Cap at target + maxExtension or double, whichever is smaller
             isAdjusted = true;
-            console.log(`Adjusting target chunk size UP to ${currentTargetWordCount} due to long run of words.`);
+            // console.log(`Adjusting target chunk size UP to ${currentTargetWordCount} due to long run of words.`);
         } else {
-            isAdjusted = false;
+             // Only reset adjustment flag if we *hit* punctuation that breaks the long run
+             if (punctuationFound === 'sentence' || punctuationFound === 'clause') {
+                isAdjusted = false;
+             }
+             // Otherwise, keep the adjustment if it was already true
         }
 
 
@@ -96,8 +101,9 @@ const findChunkInfo = (
                          backtrackWords--;
                      }
                  }
-                  console.log(`Chunk exceeded max extension (${targetWordCount + maxWordExtension}). Backtracking from ${currentIndex} to ${backtrackIndex + 1}`);
-                 currentIndex = backtrackIndex + 1; // Point to the token *after* the last included one
+                //   console.log(`Chunk exceeded max extension (${targetWordCount + maxWordExtension}). Backtracking from ${currentIndex} to ${backtrackIndex + 1}`);
+                 currentIndex = backtrackIndex; // Point to the token *at* the end of the backtracked chunk
+                 wordsInCurrentChunk = backtrackWords; // Update word count for the backtracked chunk
                  break; // Force break after backtracking
              }
 
@@ -115,6 +121,7 @@ const findChunkInfo = (
                 let lookaheadIndex = currentIndex + 1;
                 let lookaheadWords = 0;
                 let firstPunctuationIndex = -1;
+                let wordsAtFirstPunctuation = -1;
 
                 while (lookaheadIndex < allTokens.length) {
                     const nextToken = allTokens[lookaheadIndex];
@@ -132,6 +139,7 @@ const findChunkInfo = (
                      const lookaheadClauseBreakSensitivity = Math.max(1, Math.ceil(currentTargetWordCount / 2));
                      if (lookaheadPunctuationType === 'sentence' || (lookaheadPunctuationType === 'clause' && (wordsSinceLastPunctuation + lookaheadWords) >= lookaheadClauseBreakSensitivity) ) {
                          firstPunctuationIndex = lookaheadIndex;
+                         wordsAtFirstPunctuation = wordsInCurrentChunk + lookaheadWords;
                          foundPunctuation = true;
                          break; // Found the first significant punctuation within allowed extension
                     }
@@ -142,6 +150,7 @@ const findChunkInfo = (
                 // If we found punctuation within the allowed extension range
                 if (firstPunctuationIndex !== -1) {
                     currentIndex = firstPunctuationIndex + 1; // Extend chunk to point *after* punctuation
+                    wordsInCurrentChunk = wordsAtFirstPunctuation; // Update word count
                     break; // Break after extending
                 }
                 // else: No suitable punctuation found within range, loop will continue or break naturally if end of text
@@ -156,8 +165,7 @@ const findChunkInfo = (
         // Reset punctuation tracking if needed *after* checking lookahead
          if (punctuationFound === 'sentence' || punctuationFound === 'clause') {
              wordsSinceLastPunctuation = 0;
-             // Also reset isAdjusted flag when punctuation is hit
-            //  isAdjusted = false; // Removed reset here, adjustment applies until next punctuation break
+             // Adjustment flag reset is handled at the start of the loop now
         }
 
     }
@@ -168,18 +176,17 @@ const findChunkInfo = (
     // --- START Sticky Word Check ---
     if (endIndex > startIndex && endIndex < allTokens.length) {
         const lastTokenIndex = endIndex - 1;
-        const lastToken = allTokens[lastTokenIndex].toLowerCase().replace(/[.,!?;:]$/, ''); // Clean last token
+        const lastToken = allTokens[lastTokenIndex]?.toLowerCase().replace(/[.,!?;:]$/, ''); // Clean last token, add safety check
         const nextToken = allTokens[endIndex]; // Get the token immediately after the potential end
 
-        if (STICKY_WORDS.has(lastToken) && isActualWord(nextToken)) {
+        if (lastToken && STICKY_WORDS.has(lastToken) && isActualWord(nextToken)) {
             // If the last token is a sticky word and the next token is an actual word,
             // try to reduce the chunk size by one token (backtrack)
             if (endIndex > startIndex + 1) { // Ensure we don't backtrack past the start
                 endIndex--; // Backtrack one token
-                console.log(`Adjusted chunk end: Avoided splitting "${lastToken}" from next word.`);
+                // console.log(`Adjusted chunk end: Avoided splitting "${lastToken}" from next word.`);
             }
             // If backtracking isn't possible (chunk would be too small/empty), we let it split.
-            // A more complex logic could try extending instead, but backtracking is simpler first.
         }
     }
     // --- END Sticky Word Check ---
@@ -193,17 +200,15 @@ const findChunkInfo = (
         }
     }
 
-     // Ensure at least one token is always included if possible
+     // Ensure at least one token is always included if possible and not at end
      const finalEndIndex = (endIndex === startIndex && startIndex < allTokens.length) ? startIndex + 1 : endIndex;
 
     // Recalculate actual words for the *final* chunk if finalEndIndex changed
     let finalActualWordsCount = actualWordsCount;
-     if (finalEndIndex !== endIndex) {
+     if (finalEndIndex !== endIndex && finalEndIndex === startIndex + 1) {
          finalActualWordsCount = 0;
-         for (let i = startIndex; i < finalEndIndex; i++) {
-             if (isActualWord(allTokens[i])) {
-                 finalActualWordsCount++;
-             }
+         if (startIndex < allTokens.length && isActualWord(allTokens[startIndex])) {
+             finalActualWordsCount = 1;
          }
      }
 
@@ -396,55 +401,36 @@ export default function Home() {
             console.warn("EPUB spine contains no items.");
           }
 
-          for (let i = 0; i < totalSections; i++) {
-            const item: Section = book.spine.items[i]; // Use Section type
-            try {
-              console.log(`Loading section ${i + 1}/${totalSections} (href: ${item.href})...`);
-              const loadTimeout = 20000;
-               // Use item.load(book.load.bind(book)) - Correct way to load section content
-               const sectionLoadPromise = item.load(book.load.bind(book)).then(sectionContent => {
-                if (!sectionContent) {
-                     console.warn(`Initial load of section ${item.idref || item.href} returned null. Retrying...`);
-                     return item.load(book.load.bind(book)).then(retryContent => {
-                         if (!retryContent) throw new Error(`Section ${item.idref || item.href} load resulted in null content after retry.`);
-                         return retryContent;
-                     });
+            // Process sections sequentially
+            for (const item of book.spine.items) {
+                try {
+                    console.log(`Loading section (href: ${item.href})...`);
+                    const section: Section = await book.load(item.href); // Load section by href
+                    const contents: Document | null = await section?.render(book.renderer); // Render the section
+
+                    if (contents && contents.body) {
+                        const sectionText = extractTextRecursive(contents.body);
+                        if (sectionText) {
+                            const trimmedSectionText = sectionText.trim();
+                            if (fullText.length > 0 && !fullText.endsWith('\n\n')) {
+                                fullText += '\n\n';
+                            } else if (fullText.length > 0 && !fullText.endsWith('\n')) {
+                                fullText += '\n';
+                            }
+                            fullText += trimmedSectionText;
+                        } else {
+                            console.warn(`Section parsing yielded no text (href: ${item.href}).`);
+                        }
+                    } else {
+                        console.warn(`Skipping section due to unexpected structure or load failure (href: ${item.href}).`);
+                    }
+                } catch (sectionError: any) {
+                    console.error(`Error processing section (href: ${item.href}):`, sectionError.message || sectionError);
+                    sectionErrors++;
+                    fullText += `\n\n[Section Skipped Due To Error: ${sectionError.message || 'Unknown error'}]\n\n`;
                 }
-                return sectionContent;
-               });
-
-              const sectionTimeoutPromise = new Promise((_, rejectSectionTimeout) =>
-                setTimeout(() => rejectSectionTimeout(new Error(`Loading section ${item.idref || item.href} timed out.`)), loadTimeout)
-              );
-
-              // The loaded content is typically an HTML Document or similar structure
-              const sectionDocument = await Promise.race([sectionLoadPromise, sectionTimeoutPromise]) as Document;
-              console.log(`Section ${i + 1}/${totalSections} loaded. Type: ${sectionDocument?.constructor?.name}`);
-
-              let sectionText = '';
-              if (sectionDocument && sectionDocument.body) { // Check if it has a body element
-                sectionText = extractTextRecursive(sectionDocument.body);
-              } else {
-                console.warn(`Skipping section ${i + 1} due to unexpected structure or load failure.`);
-              }
-
-              if (sectionText) {
-                sectionText = sectionText.trim();
-                if (fullText.length > 0 && !fullText.endsWith('\n\n')) {
-                  fullText += '\n\n';
-                } else if (fullText.length > 0 && !fullText.endsWith('\n')) {
-                  fullText += '\n';
-                }
-                fullText += sectionText;
-              } else {
-                console.warn(`Section ${i + 1} parsing yielded no text.`);
-              }
-            } catch (sectionError: any) {
-              console.error(`Error processing section ${i + 1} (href: ${item.href}):`, sectionError.message || sectionError);
-              sectionErrors++;
-              fullText += `\n\n[Section ${i + 1} Skipped Due To Error: ${sectionError.message || 'Unknown error'}]\n\n`;
             }
-          }
+
           console.log(`Processed ${totalSections} sections with ${sectionErrors} errors.`);
 
           fullText = fullText.replace(/[ \t]{2,}/g, ' ').replace(/(\r\n|\r|\n)[ \t]*(\r\n|\r|\n)/g, '\n\n').replace(/(\n\n){2,}/g, '\n\n').trim();
@@ -595,7 +581,7 @@ export default function Home() {
 
        // Apply delay multiplier based on punctuation at the end of the PREVIOUS chunk
        if (punctuationType === 'sentence' || punctuationType === 'clause') {
-           console.log(`Applying x3 delay multiplier due to previous chunk ending with ${punctuationType}.`);
+           // console.log(`Applying x3 delay multiplier due to previous chunk ending with ${punctuationType}.`);
            return { delayMultiplier: 3.0 }; // Triple delay for sentence or clause end
        }
 
@@ -634,7 +620,7 @@ export default function Home() {
         const effectiveWords = Math.max(1, actualWordsInChunk); // Ensure at least 1 word's worth of delay
         const currentDelay = wordInterval * effectiveWords * delayMultiplier;
 
-        console.log(`Scheduling next chunk. Words: ${actualWordsInChunk}, Interval: ${wordInterval.toFixed(0)}ms, Multiplier: ${delayMultiplier.toFixed(2)}, Delay: ${currentDelay.toFixed(0)}ms, AdjustedChunk: ${isAdjusted}`);
+        // console.log(`Scheduling next chunk. Words: ${actualWordsInChunk}, Interval: ${wordInterval.toFixed(0)}ms, Multiplier: ${delayMultiplier.toFixed(2)}, Delay: ${currentDelay.toFixed(0)}ms, AdjustedChunk: ${isAdjusted}`);
         timeoutRef.current = setTimeout(advanceChunk, Math.max(50, currentDelay)); // Ensure minimum delay
      }
 
@@ -709,7 +695,7 @@ export default function Home() {
 
      setCurrentIndex(targetChunkStartIndex);
 
-     console.log(`Progress click: ${clickPercentage * 100}%. Target word index: ${targetWordIndex}. Jumped to chunk start index: ${targetChunkStartIndex}`);
+     // console.log(`Progress click: ${clickPercentage * 100}%. Target word index: ${targetWordIndex}. Jumped to chunk start index: ${targetChunkStartIndex}`);
 
    }, [actualWordCount, words, chunkWordTarget]);
 
@@ -740,7 +726,7 @@ export default function Home() {
             handleProgressClick(percentage);
         }}
         aria-label={`Reading progress: ${Math.round(progress)}%`}
-        role="slider" // Semantically it acts like a slider
+        role="slider" // Semantically it acts like a slider/seekbar
         aria-valuenow={progress}
         aria-valuemin={0}
         aria-valuemax={100}
