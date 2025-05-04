@@ -2,6 +2,7 @@
 'use client';
 
 import * as React from 'react';
+import { Header } from '@/components/header'; // Import the new Header component
 import { ReaderControls } from '@/components/reader-controls';
 import { ReadingDisplay } from '@/components/reading-display';
 import { Progress } from '@/components/ui/progress';
@@ -44,9 +45,18 @@ export default function Home() {
 
     return (
         <div className="flex flex-col h-screen bg-background text-foreground">
-            <Progress
+             {/* Render Header, passing WPM and Chunk Size props */}
+             <Header
+                wpm={wpm}
+                setWpm={setWpm}
+                chunkWordTarget={chunkWordTarget}
+                setChunkWordTarget={setChunkWordTarget}
+            />
+
+             {/* Progress bar adjusted to be below the header */}
+             <Progress
                 value={progress}
-                className="w-full h-2 fixed top-0 left-0 z-20 cursor-pointer"
+                className="w-full h-2 fixed top-14 left-0 z-10 cursor-pointer" // Positioned below header, lower z-index
                 onClick={(e) => {
                     const progressBar = e.currentTarget;
                     const clickX = e.clientX - progressBar.getBoundingClientRect().left;
@@ -69,7 +79,9 @@ export default function Home() {
                     }
                 }}
             />
-            <main className="flex-grow flex items-center justify-center overflow-hidden pt-5 pb-20 px-4">
+
+             {/* Adjust main content padding to account for Header and Controls */}
+             <main className="flex-grow flex items-center justify-center overflow-hidden pt-20 pb-20 px-4"> {/* Increased pt */}
                 {words.length > 0 ? (
                     <ReadingDisplay
                         tokens={currentTokensForDisplay}
@@ -83,11 +95,13 @@ export default function Home() {
                     </div>
                 )}
             </main>
-            <ReaderControls
-                wpm={wpm}
-                setWpm={setWpm}
-                chunkWordTarget={chunkWordTarget}
-                setChunkWordTarget={setChunkWordTarget}
+
+             {/* Render Controls, removing WPM and Chunk Size props */}
+             <ReaderControls
+                // wpm={wpm} // Removed
+                // setWpm={setWpm} // Removed
+                // chunkWordTarget={chunkWordTarget} // Removed
+                // setChunkWordTarget={setChunkWordTarget} // Removed
                 isPlaying={isPlaying}
                 togglePlay={togglePlay}
                 onFileUpload={handleFileUpload}
