@@ -73,22 +73,24 @@ export function useBackground() {
     // console.log(`[useBackground] Applying type: ${backgroundType}, value: ${backgroundValue.substring(0, 50)}...`);
 
     try {
-        // Reset styles first to avoid conflicts
-        document.body.style.backgroundImage = '';
-        document.body.style.backgroundColor = ''; // Allow CSS variables for color theme
+        // Always reset common image properties when applying any style
         document.body.style.backgroundSize = '';
         document.body.style.backgroundPosition = '';
         document.body.style.backgroundRepeat = '';
+        document.body.style.backgroundAttachment = '';
 
 
       if (backgroundType === 'color') {
-        // Theme color is handled by CSS variables, no inline style needed
-        console.log('[useBackground] Applied theme color background (via CSS).');
+        // Theme color is handled by CSS variables, set bg image to none
+        document.body.style.backgroundImage = 'none';
+        document.body.style.backgroundColor = ''; // Reset inline color to let CSS class take over
+        console.log('[useBackground] Applied theme color background (cleared inline styles).');
         localStorage.setItem(LOCAL_STORAGE_KEY_TYPE, 'color');
         localStorage.setItem(LOCAL_STORAGE_KEY_VALUE, ''); // Empty string signifies theme color
       } else if (backgroundType === 'image' || backgroundType === 'custom') {
-        // Apply image styles
+        // Apply image styles and make background color transparent
         document.body.style.backgroundImage = `url("${backgroundValue}")`;
+        document.body.style.backgroundColor = 'transparent'; // Ensure image shows over any CSS color
         document.body.style.backgroundSize = 'cover';
         document.body.style.backgroundPosition = 'center center'; // Explicitly center
         document.body.style.backgroundRepeat = 'no-repeat';
