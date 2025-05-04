@@ -1,5 +1,5 @@
-
-import type { Book, Section } from 'epubjs';
+import type { Book } from 'epubjs';
+import type Section from 'epubjs/types/section';
 
 // Helper function to check if an error might be related to DRM
 export function isLikelyDrmError(error: any): boolean {
@@ -78,10 +78,13 @@ export const parseEpub = async (
             const arrayBuffer = await file.arrayBuffer();
             book = Epub(arrayBuffer);
 
-            book.on('book:error', (err: any) => {
+            book.on('book:error', (err: any) => {                
                 console.error('EPUB Book Error Event:', err);
-                reject(new Error(`EPUB loading error: ${err.message || 'Unknown error during book initialization.'} ${isLikelyDrmError(err) ? ' (Possible DRM)' : ''}`));
+                reject(err);
             });
+            book.on('error', (err: any) => {
+                console.error("epubjs error:", err);
+            })
 
             await book.ready;
             console.log("book.ready resolved. Metadata:", book.metadata);
@@ -90,23 +93,23 @@ export const parseEpub = async (
             let fullText = '';
             let sectionErrors = 0;
             const totalSections = book.spine.items.length;
-            if (totalSections === 0) console.warn("EPUB spine contains no items.");
+            if (totalSections === 0) console.warn("EPUB spine contains no items.", book.spine);
 
             const sectionTexts: string[] = [];
-            for (const item of book.spine.items) {
+            for (const item of book.spine.toc) {
                 let sectionText = '';
                 try {
-                    console.log(`Loading section (href: ${item.href})...`);
+                    console.log(`Loading section (href: ${item.href}, idref: ${item.idref})...`);
                     const section: Section | undefined = await book.spine.load(item); // Use spine.load
                     if (!section) {
                         console.warn(`Section not loaded or undefined (href: ${item.href})`);
-                        throw new Error("Section load returned undefined.");
+                        sectionErrors++;
                     }
 
                     const body = await section.render(); // Use render() to get HTML content
                     if (!body) {
                         console.warn(`Section rendered no body content (href: ${item.href})`);
-                        throw new Error("Section render returned no content.");
+                        sectionErrors++;
                     }
 
                     // Parse the HTML body string
@@ -120,12 +123,11 @@ export const parseEpub = async (
                         }
                     } else {
                         console.warn(`Skipping section due to missing body element after parsing (href: ${item.href}).`);
-                        throw new Error("Parsed document has no body element.");
+                        sectionErrors++;
                     }
                 } catch (sectionError: any) {
                     console.error(`Error processing section (href: ${item.href}):`, sectionError.message || sectionError);
                     sectionErrors++;
-                    sectionText = `\n\n[Section Skipped Due To Error: ${sectionError.message || 'Unknown error'}]\n\n`;
                 }
                 sectionTexts.push(sectionText.trim());
             }
@@ -136,6 +138,7 @@ export const parseEpub = async (
             console.log(`Processed ${totalSections} sections with ${sectionErrors} errors.`);
             console.log(`Total extracted text length: ${fullText.length}`);
 
+            if(sectionErrors > 0) console.warn(`EPUB had ${sectionErrors} section parsing errors.`);
             if (fullText.length === 0 && totalSections > 0) {
                 const errorMsg = sectionErrors === totalSections ?
                     `Failed to extract any text. All ${totalSections} sections failed.` :
@@ -156,14 +159,16 @@ export const parseEpub = async (
                 }
                 resolve(fullText);
             }
-        } catch (error: any) {
-            console.error("Critical EPUB Processing Error:", error);
+        } catch (err: any) {
+            console.error("Critical EPUB Processing Error:", err);
             let errorMessage = "Error parsing EPUB file.";
-            if (isLikelyDrmError(error)) errorMessage += " This file might be DRM-protected.";
-            else if (error.message?.includes('File is not a zip file')) errorMessage += " Invalid EPUB format.";
-            else if (error.message?.includes('timed out')) errorMessage += ` ${error.message}`;
-            else if (error.message) errorMessage += ` Details: ${error.message}`;
+            if (isLikelyDrmError(err)) errorMessage += " This file might be DRM-protected.";
+            else if (err.message?.includes('File is not a zip file')) errorMessage += " Invalid EPUB format.";
+            else if (err.message?.includes('timed out')) errorMessage += ` ${err.message}`;
+            else if (err.message) errorMessage += ` Details: ${err.message}`;
+            else if (err instanceof Error) errorMessage += err.message
             else errorMessage += " Unexpected error.";
+            
             reject(new Error(errorMessage));
         } finally {
             if (toastId && toastCtrl?.id === toastId) {
@@ -171,7 +176,9 @@ export const parseEpub = async (
             }
             if (book && typeof book.destroy === 'function') {
                 try { book.destroy(); } catch (destroyError) { console.warn("Error destroying book instance:", destroyError); }
-            }
+            } else if(book){
+                console.warn('Book instance is present but the destroy function is not defined.');
+             }
         }
     });
 };
