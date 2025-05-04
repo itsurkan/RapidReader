@@ -1,4 +1,3 @@
-
 'use client';
 
 import * as React from 'react';
@@ -43,11 +42,15 @@ const findChunkInfo = (
     let wordsInCurrentChunk = 0;
     let currentIndex = startIndex;
     let punctuationFound: 'sentence' | 'clause' | 'none' = 'none';
+    let wordsSinceLastPunctuation = 0; // Track words since last significant punctuation
 
     while (currentIndex < allTokens.length) {
         const token = allTokens[currentIndex];
-        if (isActualWord(token)) {
+        const isWord = isActualWord(token);
+
+        if (isWord) {
             wordsInCurrentChunk++;
+            wordsSinceLastPunctuation++;
         }
 
         currentIndex++; // Move to the next token index
@@ -59,18 +62,58 @@ const findChunkInfo = (
             break;
         }
 
-        // End chunk if a clause-ending punctuation is found AND we have a reasonable number of words
-        // Adjust the threshold (e.g., targetWordCount / 2) as needed
-        if (punctuationFound === 'clause' && wordsInCurrentChunk >= Math.max(1, Math.ceil(targetWordCount / 2))) {
+        // End chunk if a clause-ending punctuation is found AND we have a reasonable number of words *since the last punctuation*
+        // This helps create more logical breaks around commas/semicolons.
+        if (punctuationFound === 'clause' && wordsSinceLastPunctuation >= Math.max(1, Math.ceil(targetWordCount / 1.5))) {
+             wordsSinceLastPunctuation = 0; // Reset counter after a clause break
             break;
         }
+        // Reset counter if clause punctuation found but not enough words followed
+        if (punctuationFound === 'clause') {
+             wordsSinceLastPunctuation = 0;
+        }
 
-        // End chunk if we've reached or exceeded the target word count
-        // Only break here if no significant punctuation was found in *this* token
-        if (wordsInCurrentChunk >= targetWordCount && punctuationFound === 'none') {
-             // Optional: Could add lookahead here, but might complicate things.
-             // Let's stick to ending based on punctuation or word count for now.
-            break;
+
+        // If we reach the target word count *and* the current token isn't punctuation (or it's just clause punctuation without enough following words), check if doubling words gets us closer to punctuation.
+        if (wordsInCurrentChunk >= targetWordCount && punctuationFound !== 'sentence') {
+            // Dynamic chunk size adjustment: Look ahead
+             let lookaheadIndex = currentIndex;
+             let lookaheadWords = 0;
+             let lookaheadPunctuation: 'sentence' | 'clause' | 'none' = 'none';
+             let foundPunctuationAhead = false;
+
+             while(lookaheadIndex < allTokens.length && lookaheadWords < targetWordCount) {
+                 const nextToken = allTokens[lookaheadIndex];
+                 if (isActualWord(nextToken)) {
+                     lookaheadWords++;
+                 }
+                 lookaheadPunctuation = getPunctuationType(nextToken);
+                 if (lookaheadPunctuation === 'sentence' || lookaheadPunctuation === 'clause') {
+                     foundPunctuationAhead = true;
+                     break;
+                 }
+                 lookaheadIndex++;
+             }
+
+            // If we found punctuation within the next `targetWordCount` words, extend the chunk to include it.
+             if (foundPunctuationAhead) {
+                // Extend currentIndex to include the punctuation and potentially following tokens if they are part of the same 'unit'
+                currentIndex = lookaheadIndex + 1; // Include the token with punctuation
+                // Recalculate words in the now potentially longer chunk
+                wordsInCurrentChunk = 0;
+                for (let i = startIndex; i < currentIndex; i++) {
+                    if (isActualWord(allTokens[i])) {
+                        wordsInCurrentChunk++;
+                    }
+                }
+                 break; // Break after extending
+             } else {
+                // If no punctuation found soon, just break at the current target word count.
+                 // Only break here if no significant punctuation was found in *this* token itself.
+                 if (punctuationFound === 'none') {
+                    break;
+                 }
+             }
         }
     }
 
@@ -98,6 +141,59 @@ const findChunkInfo = (
 
 
     return { endIndex: finalEndIndex, actualWordsInChunk: finalActualWordsCount };
+};
+
+
+// Helper to find the start index of the *previous* chunk
+const findPreviousChunkStart = (
+    currentStartIndex: number,
+    targetWordCount: number,
+    allTokens: string[]
+): number => {
+    if (currentStartIndex <= 0) return 0;
+
+    let wordsToGoBack = targetWordCount;
+    let previousIndex = currentStartIndex - 1;
+    let actualWordsFound = 0;
+    let sentencePunctuationMet = false;
+
+    // First pass: Go back roughly targetWordCount actual words, stopping at sentence punctuation
+    while (previousIndex >= 0 && actualWordsFound < targetWordCount) {
+        const token = allTokens[previousIndex];
+        if (isActualWord(token)) {
+            actualWordsFound++;
+        }
+        if (getPunctuationType(token) === 'sentence' && actualWordsFound > 0) {
+             sentencePunctuationMet = true;
+             previousIndex++; // Start *after* the sentence punctuation
+            break;
+        }
+        previousIndex--;
+    }
+
+    // If we stopped exactly at the beginning, return 0
+    if (previousIndex < 0) return 0;
+
+     // If we stopped due to sentence punctuation, start the chunk from there.
+     if (sentencePunctuationMet) {
+         return previousIndex;
+     }
+
+
+    // If we went back roughly targetWordCount without hitting sentence end,
+    // we now need to find the *start* of the chunk containing this `previousIndex`.
+    // We do this by simulating `findChunkInfo` starting from the beginning until it includes `previousIndex`.
+    let simulatedStartIndex = 0;
+    let lastValidStartIndex = 0;
+    while (simulatedStartIndex <= previousIndex) {
+         lastValidStartIndex = simulatedStartIndex;
+         const { endIndex } = findChunkInfo(simulatedStartIndex, targetWordCount, allTokens);
+         if (endIndex <= simulatedStartIndex) break; // Avoid infinite loop if findChunkInfo stalls
+         simulatedStartIndex = endIndex;
+    }
+
+    // The start of the previous chunk is the last valid start index we found
+    return lastValidStartIndex;
 };
 
 
@@ -185,7 +281,8 @@ export default function Home() {
           const arrayBuffer = e.target.result as ArrayBuffer;
           console.log(`EPUB ArrayBuffer size: ${arrayBuffer.byteLength}`);
 
-          book = Epub(arrayBuffer, { encoding: 'binary' });
+          // Explicitly pass encoding option
+          book = Epub(arrayBuffer, { encoding: 'binary' }); // or 'base64' if that's how you read it, binary often works
 
           book.on('book:error', (err: any) => {
             console.error('EPUB Book Error Event:', err);
@@ -194,7 +291,8 @@ export default function Home() {
 
           console.log("EPUB instance created, awaiting book.ready...");
 
-          const readyTimeout = 30000;
+          // Increased timeout for book.ready as it can take time for larger/complex EPUBs
+          const readyTimeout = 45000; // 45 seconds
           const readyPromise = book.ready;
           const timeoutPromise = new Promise((_, rejectTimeout) =>
             setTimeout(() => rejectTimeout(new Error(`EPUB book.ready timed out after ${readyTimeout / 1000} seconds.`)), readyTimeout)
@@ -217,13 +315,22 @@ export default function Home() {
             try {
                 console.log(`Loading section ${i + 1}/${totalSections} (ID: ${item.idref || 'unknown'}, Href: ${item.href})...`);
 
-                const loadTimeout = 15000;
+                // Increased timeout per section
+                const loadTimeout = 20000; // 20 seconds per section
                 const sectionLoadPromise = item.load(book.load.bind(book)).then(sectionContent => {
                     if (!sectionContent) {
-                        throw new Error(`Section ${item.idref || item.href} load resulted in null or undefined content.`);
+                        // Try reloading once on null content, could be a transient issue
+                        console.warn(`Initial load of section ${item.idref || item.href} returned null. Retrying...`);
+                        return item.load(book.load.bind(book)).then(retryContent => {
+                            if (!retryContent) {
+                                throw new Error(`Section ${item.idref || item.href} load resulted in null or undefined content even after retry.`);
+                            }
+                            return retryContent;
+                        });
                     }
                     return sectionContent;
                 });
+
 
                 const sectionTimeoutPromise = new Promise((_, rejectSectionTimeout) =>
                   setTimeout(() => rejectSectionTimeout(new Error(`Loading section ${item.idref || item.href} timed out after ${loadTimeout / 1000} seconds.`)), loadTimeout)
@@ -235,36 +342,58 @@ export default function Home() {
 
                 let sectionText = '';
                 if (section && typeof (section as any).querySelector === 'function') {
+                    // Prioritize extracting from body, but have fallbacks
                     const body = (section as Document).body;
+                    const docElement = (section as Document).documentElement;
+
                     if (body) {
                         console.log(`Extracting text from body of section ${item.idref || item.href}.`);
                         sectionText = extractTextRecursive(body);
-                    } else {
+                    } else if (docElement) {
                         console.warn(`Section ${item.idref || item.href} loaded but body element not found. Trying documentElement.`);
-                        sectionText = extractTextRecursive((section as Document).documentElement);
-                         if (sectionText) {
-                             console.log(`Fallback extraction for section ${item.idref || item.href} successful.`);
-                         } else {
-                             console.warn(`Fallback extraction failed for section ${item.idref || item.href}. No text extracted.`);
-                         }
+                        sectionText = extractTextRecursive(docElement);
                     }
+                    // Add a fallback to serialize the whole section if body/documentElement fails
+                     if (!sectionText && docElement) {
+                         console.warn(`Falling back to serializing entire documentElement for section ${item.idref || item.href}.`);
+                         try {
+                            const serializer = new XMLSerializer();
+                            const sectionString = serializer.serializeToString(docElement);
+                             const parser = new DOMParser();
+                             const docFromString = parser.parseFromString(sectionString, 'text/html');
+                             sectionText = extractTextRecursive(docFromString.body || docFromString.documentElement);
+                             if (sectionText) console.log("Fallback serialization extraction successful.");
+                             else console.warn("Fallback serialization extraction failed.");
+                         } catch (serializeError) {
+                             console.error("Error during fallback serialization:", serializeError);
+                         }
+                     }
+
+
+                    if (!sectionText) {
+                         console.warn(`Initial extraction failed for section ${item.idref || item.href}. No text extracted from DOM structure.`);
+                    }
+
                 } else if (typeof section === 'string') {
                     console.warn(`Section ${item.idref || item.href} loaded as a string. Attempting basic HTML parse.`);
                     const parser = new DOMParser();
-                    const doc = parser.parseFromString(section, item.mediaType || 'text/html');
+                    // Ensure parsing as text/html or application/xhtml+xml based on item's media type if available
+                    const mediaType = item.mediaType || 'text/html';
+                    const doc = parser.parseFromString(section, mediaType as DOMParserSupportedType);
                     sectionText = extractTextRecursive(doc.body || doc.documentElement);
                     if(sectionText) {
                        console.log(`Extracted text from string-based section ${item.idref || item.href}.`);
                     } else {
-                       console.warn(`Failed to extract text from string-based section ${item.idref || item.href}.`);
+                       console.warn(`Failed to extract text from string-based section ${item.idref || item.href}. Content might be non-HTML or empty.`);
                     }
                 } else if (section instanceof Blob || section instanceof ArrayBuffer) {
                     console.warn(`Section ${item.idref || item.href} loaded as Blob/ArrayBuffer. Attempting text decode.`);
                     try {
                         const blob = (section instanceof ArrayBuffer) ? new Blob([section]) : section;
-                        const decodedText = await blob.text();
+                        const decodedText = await blob.text(); // Assumes UTF-8, might need encoding detection
                          const parser = new DOMParser();
-                         const doc = parser.parseFromString(decodedText, item.mediaType || 'text/html');
+                          const mediaType = item.mediaType || 'text/html';
+                         const doc = parser.parseFromString(decodedText, mediaType as DOMParserSupportedType);
                          sectionText = extractTextRecursive(doc.body || doc.documentElement);
                          if(sectionText) {
                            console.log(`Successfully decoded and extracted text from binary section ${item.idref || item.href}.`);
@@ -280,15 +409,17 @@ export default function Home() {
                 }
 
                  if (sectionText) {
-                     // Add space before appending if necessary, and avoid double newlines from recursive function + here
-                    if (fullText.length > 0 && !fullText.endsWith('\n') && !sectionText.startsWith('\n')) {
-                      fullText += ' ';
-                    } else if (fullText.length > 0 && fullText.endsWith('\n\n') && sectionText.startsWith('\n\n')) {
-                      sectionText = sectionText.substring(2); // Remove duplicate double newline
-                    } else if (fullText.length > 0 && fullText.endsWith('\n') && sectionText.startsWith('\n') && !sectionText.startsWith('\n\n')) {
-                        sectionText = sectionText.substring(1); // Remove single duplicate newline
-                    }
-                     fullText += sectionText.trim(); // Trim section text before adding
+                    // Trim section text first before checking/adding separators
+                    sectionText = sectionText.trim();
+                     if (fullText.length > 0 && !fullText.endsWith('\n\n')) {
+                         // Add a double newline if the previous text didn't end with one
+                         fullText += '\n\n';
+                     } else if (fullText.length > 0 && !fullText.endsWith('\n')) {
+                          // Add a single newline if the previous text didn't end with any newline
+                          // This case might be less common due to extractTextRecursive's block handling
+                         fullText += '\n';
+                     }
+                     fullText += sectionText; // Append the trimmed section text
                  } else {
                      console.warn(`Section ${item.idref || item.href} parsing yielded no text.`);
                  }
@@ -349,6 +480,9 @@ export default function Home() {
             } else {
                  errorMessage += " It might be corrupted, in an unsupported format, or have internal structure issues.";
             }
+             if (book && typeof book.destroy === 'function') {
+                 try { book.destroy(); } catch (err) { console.warn("Error destroying book after critical error:", err); }
+             }
             reject(new Error(errorMessage));
         } finally {
              try {
@@ -382,7 +516,7 @@ export default function Home() {
       console.log(`Starting FileReader for ${file.name}...`);
       reader.readAsArrayBuffer(file);
     });
-   }, [toast, dismiss, extractTextRecursive]); // Added extractTextRecursive dependency
+   }, [toast, extractTextRecursive]); // Removed 'dismiss' as it's called directly now
 
 
   const handleFileUpload = useCallback(
@@ -405,8 +539,8 @@ export default function Home() {
       setActualWordCount(0);
       setIsAdjustingChunk(false);
 
-      const { dismiss: dismissLoading, id: loadingToastId } = toast({ title: 'Loading File...', description: `Processing ${file.name}` });
-
+      // Get dismiss function and ID *before* potential async operations
+      const { dismiss: dismissLoadingToast, id: loadingToastId } = toast({ title: 'Loading File...', description: `Processing ${file.name}` });
 
       try {
          let fileContent = '';
@@ -439,7 +573,7 @@ export default function Home() {
              console.log("parseEpub completed.");
          } else if (lowerCaseName.endsWith('.mobi')) {
             console.warn("Unsupported file type: .mobi");
-            dismissLoading(); // Dismiss loading toast
+            dismissLoadingToast(); // Dismiss loading toast
             toast({
              title: 'Unsupported Format',
              description: '.mobi files are not currently supported. Please try .txt or .epub.',
@@ -449,7 +583,7 @@ export default function Home() {
            return;
          } else {
             console.warn(`Unsupported file type: ${file.type} / ${file.name}`);
-            dismissLoading(); // Dismiss loading toast
+            dismissLoadingToast(); // Dismiss loading toast
            toast({
              title: 'Unsupported File Type',
              description: `"${file.name}" is not a supported .txt or .epub file.`,
@@ -472,7 +606,7 @@ export default function Home() {
          console.log(`Counted ${wordCount} actual words.`);
 
          // Explicitly dismiss the loading toast *before* showing success/error
-         dismissLoading();
+         dismissLoadingToast(); // Use the function obtained earlier
 
 
          if (newTokens.length === 0 && fileContent.length > 0) {
@@ -506,7 +640,7 @@ export default function Home() {
       } catch (error: any) {
          console.error('Error during file processing or parsing:', error);
           // Dismiss loading toast first, then show error
-          dismissLoading();
+          dismissLoadingToast(); // Use the function obtained earlier
           toast({
            title: 'Error Loading File',
            description: error.message || 'An unexpected error occurred. Check console.',
@@ -524,7 +658,7 @@ export default function Home() {
         }
       }
     },
-    [parseEpub, toast, dismiss] // Include dismiss from useToast
+    [parseEpub, toast] // No dismiss dependency needed here
   );
 
 
@@ -540,13 +674,9 @@ export default function Home() {
        const punctuationType = getPunctuationType(previousToken);
 
         // Apply delay multiplier based on the punctuation at the end of the PREVIOUS chunk
-       if (punctuationType === 'sentence') {
-           console.log("Applying x2 delay multiplier for sentence end.");
-           return { delayMultiplier: 2.0 }; // Double delay after ., !, ?
-       }
-       if (punctuationType === 'clause') {
-            console.log("Applying x1.5 delay multiplier for clause end.");
-           return { delayMultiplier: 1.5 }; // 50% longer delay after ,, ;, :
+       if (punctuationType === 'sentence' || punctuationType === 'clause') {
+           console.log(`Applying x2 delay multiplier for ${punctuationType} end.`);
+           return { delayMultiplier: 2.0 }; // Double delay after ., !, ?, ,, ;, :
        }
 
        return { delayMultiplier: 1.0 }; // Default multiplier
@@ -649,11 +779,27 @@ export default function Home() {
              if (!newState && timeoutRef.current) {
                  clearTimeout(timeoutRef.current);
                  timeoutRef.current = null;
+                 console.log("Playback paused, timer cleared.");
+             } else if (newState) {
+                 console.log("Playback started/resumed.");
              }
              return newState;
          });
     }
   };
+
+  // --- Navigation ---
+   const goToNextChunk = useCallback(() => {
+     if (isPlaying) setIsPlaying(false); // Pause on manual navigation
+     advanceChunk();
+   }, [advanceChunk, isPlaying]);
+
+   const goToPreviousChunk = useCallback(() => {
+     if (isPlaying) setIsPlaying(false); // Pause on manual navigation
+     const previousStartIndex = findPreviousChunkStart(currentIndex, chunkWordTarget, tokens);
+     setCurrentIndex(previousStartIndex);
+   }, [currentIndex, chunkWordTarget, tokens, isPlaying]);
+
 
   // Find the chunk info for the *current* display using the new logic
   const { endIndex: currentChunkEndIndex } = findChunkInfo(currentIndex, chunkWordTarget, tokens);
@@ -696,13 +842,11 @@ export default function Home() {
         togglePlay={togglePlay}
         onFileUpload={handleFileUpload}
         fileName={fileName}
+        goToNextChunk={goToNextChunk} // Pass navigation function
+        goToPreviousChunk={goToPreviousChunk} // Pass navigation function
+        canGoPrevious={currentIndex > 0} // Determine if previous is possible
+        canGoNext={currentIndex < tokens.length} // Determine if next is possible
       />
     </div>
   );
 }
-// Potential Future Enhancements:
-// - Navigation (jump back/forward, go to percentage)
-// - Remember reading position across sessions (localStorage)
-// - Theme switching (light/dark)
-// - Font customization
-// - Support for more file types (PDF, DOCX - might require server-side processing or heavier libraries)
