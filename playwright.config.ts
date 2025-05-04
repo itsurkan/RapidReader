@@ -2,7 +2,7 @@ import { defineConfig, devices } from '@playwright/test';
 import path from 'path';
 
 // Use process.env.PORT by default and fallback to port 3000
-const PORT = process.env.PORT || 9002;
+const PORT = process.env.PORT || 9003
 
 // Set webServer.url and use.baseURL with the location of the WebServer respecting the PORT environment variable.
 const baseURL = `http://localhost:${PORT}`;

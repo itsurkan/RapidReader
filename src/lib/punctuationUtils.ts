@@ -1,3 +1,4 @@
+
 // Helper function to determine punctuation type at the end of a token
 export const getPunctuationType = (token: string): 'sentence' | 'clause' | 'none' => {
     if (!token) return 'none';

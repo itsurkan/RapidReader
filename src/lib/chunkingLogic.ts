@@ -1,6 +1,6 @@
 
-import { isActualWord } from './wordUtils'; // Correct path
-import { getPunctuationType } from './punctuationUtils'; // Correct path
+import { isActualWord } from '@/lib/wordUtils'; // Correct path using alias
+import { getPunctuationType } from '@/lib/punctuationUtils'; // Correct path using alias
 
 interface ChunkInfo {
     endIndex: number; // Index *after* the last token in the chunk
