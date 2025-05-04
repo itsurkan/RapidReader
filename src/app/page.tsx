@@ -1,11 +1,12 @@
+
 'use client';
 
 import * as React from 'react';
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import type { Book } from 'epubjs'; // Import epubjs types only
+import type { Book, Section } from 'epubjs'; // Import epubjs types
 import { ReaderControls } from '@/components/reader-controls';
 import { ReadingDisplay } from '@/components/reading-display';
-import { Progress } from '@/components/ui/progress'; // Ensure Progress is imported correctly
+import { Progress } from '@/components/ui/progress';
 import { useToast } from '@/hooks/use-toast';
 import { cn } from '@/lib/utils';
 
@@ -48,9 +49,9 @@ const findChunkInfo = (
     targetWordCount: number, // Approximate target words per displayed chunk
     allTokens: string[],
     maxWordExtension: number = 3 // Maximum words to exceed targetWordCount
-): { endIndex: number; actualWordsInChunk: number } => {
+): { endIndex: number; actualWordsInChunk: number, isAdjusted: boolean } => {
     if (startIndex >= allTokens.length) {
-        return { endIndex: startIndex, actualWordsInChunk: 0 };
+        return { endIndex: startIndex, actualWordsInChunk: 0, isAdjusted: false };
     }
 
     let wordsInCurrentChunk = 0;
@@ -71,14 +72,14 @@ const findChunkInfo = (
         punctuationFound = getPunctuationType(token);
 
         // Adaptive Chunk Size Logic: If we've seen many words without punctuation, increase target size
-        // Reset this flag at the start of each findChunkInfo call implicitly by being a local var.
         let currentTargetWordCount = targetWordCount;
-        if (wordsSinceLastPunctuation > targetWordCount * 2 && punctuationFound !== 'sentence' && punctuationFound !== 'clause') {
-            currentTargetWordCount = Math.min(targetWordCount * 2, targetWordCount + maxWordExtension); // Example: Double target, capped
-             isAdjusted = true;
-             console.log(`Adjusting target chunk size to ${currentTargetWordCount} due to long run of words.`);
+        // Adjust target *up* if 2*target words seen without punctuation
+        if (wordsSinceLastPunctuation >= targetWordCount * 2 && punctuationFound !== 'sentence' && punctuationFound !== 'clause') {
+            currentTargetWordCount = Math.min(targetWordCount + maxWordExtension, targetWordCount * 2); // Cap at target + maxExtension or double, whichever is smaller
+            isAdjusted = true;
+            console.log(`Adjusting target chunk size UP to ${currentTargetWordCount} due to long run of words.`);
         } else {
-             isAdjusted = false;
+            isAdjusted = false;
         }
 
 
@@ -95,7 +96,8 @@ const findChunkInfo = (
                          backtrackWords--;
                      }
                  }
-                 currentIndex = backtrackIndex + 1;
+                  console.log(`Chunk exceeded max extension (${targetWordCount + maxWordExtension}). Backtracking from ${currentIndex} to ${backtrackIndex + 1}`);
+                 currentIndex = backtrackIndex + 1; // Point to the token *after* the last included one
                  break; // Force break after backtracking
              }
 
@@ -155,7 +157,7 @@ const findChunkInfo = (
          if (punctuationFound === 'sentence' || punctuationFound === 'clause') {
              wordsSinceLastPunctuation = 0;
              // Also reset isAdjusted flag when punctuation is hit
-             isAdjusted = false;
+            //  isAdjusted = false; // Removed reset here, adjustment applies until next punctuation break
         }
 
     }
@@ -249,7 +251,7 @@ const findChunkStartForWordIndex = (
     while (simulatedStartIndex < allTokens.length) {
         chunkStartIndex = simulatedStartIndex; // Store the start index of the current chunk
         // Use findChunkInfo, ignoring the isAdjusted flag for seeking
-        const { endIndex, actualWordsInChunk } = findChunkInfo(simulatedStartIndex, targetWordCount, allTokens);
+        const { endIndex } = findChunkInfo(simulatedStartIndex, targetWordCount, allTokens);
 
         // Count actual words up to the end of this chunk
         let wordsInThisChunkAndBefore = 0;
@@ -293,7 +295,7 @@ export default function Home() {
     dismiss: () => void;
     update: (props: any) => void;
   } | null>(null); // Ref to store toast controller
-  const { toast, dismiss: dismissToast } = useToast(); // Destructure dismiss from useToast
+  const { toast, dismiss } = useToast(); // Destructure dismiss from useToast
 
 
   // Function to calculate base interval delay per *word* based on WPM
@@ -368,7 +370,7 @@ export default function Home() {
           const arrayBuffer = await file.arrayBuffer(); // Use await with arrayBuffer()
           console.log(`EPUB ArrayBuffer size: ${arrayBuffer.byteLength}`);
 
-          book = Epub(arrayBuffer, { encoding: 'binary' });
+          book = Epub(arrayBuffer); // Removed encoding option
 
           book.on('book:error', (err: any) => {
             console.error('EPUB Book Error Event:', err);
@@ -395,57 +397,35 @@ export default function Home() {
           }
 
           for (let i = 0; i < totalSections; i++) {
-            const item = book.spine.items[i];
+            const item: Section = book.spine.items[i]; // Use Section type
             try {
-              console.log(`Loading section ${i + 1}/${totalSections}...`);
+              console.log(`Loading section ${i + 1}/${totalSections} (href: ${item.href})...`);
               const loadTimeout = 20000;
-              const sectionLoadPromise = item.load(book.load.bind(book)).then(sectionContent => {
+               // Use item.load(book.load.bind(book)) - Correct way to load section content
+               const sectionLoadPromise = item.load(book.load.bind(book)).then(sectionContent => {
                 if (!sectionContent) {
-                  console.warn(`Initial load of section ${item.idref || item.href} returned null. Retrying...`);
-                  return item.load(book.load.bind(book)).then(retryContent => {
-                    if (!retryContent) throw new Error(`Section ${item.idref || item.href} load resulted in null content after retry.`);
-                    return retryContent;
-                  });
+                     console.warn(`Initial load of section ${item.idref || item.href} returned null. Retrying...`);
+                     return item.load(book.load.bind(book)).then(retryContent => {
+                         if (!retryContent) throw new Error(`Section ${item.idref || item.href} load resulted in null content after retry.`);
+                         return retryContent;
+                     });
                 }
                 return sectionContent;
-              });
+               });
+
               const sectionTimeoutPromise = new Promise((_, rejectSectionTimeout) =>
                 setTimeout(() => rejectSectionTimeout(new Error(`Loading section ${item.idref || item.href} timed out.`)), loadTimeout)
               );
 
-              const section = await Promise.race([sectionLoadPromise, sectionTimeoutPromise]) as Document | string | any;
-              console.log(`Section ${i + 1} loaded. Type: ${typeof section}`);
+              // The loaded content is typically an HTML Document or similar structure
+              const sectionDocument = await Promise.race([sectionLoadPromise, sectionTimeoutPromise]) as Document;
+              console.log(`Section ${i + 1}/${totalSections} loaded. Type: ${sectionDocument?.constructor?.name}`);
 
               let sectionText = '';
-              if (section && typeof section.querySelector === 'function') {
-                sectionText = extractTextRecursive(section.body || section.documentElement);
-                 if (!sectionText && section.documentElement) { // Fallback
-                     console.warn(`Falling back to serializing entire documentElement for section ${item.idref || item.href}.`);
-                     try {
-                         const serializer = new XMLSerializer();
-                         const sectionString = serializer.serializeToString(section.documentElement);
-                         const parser = new DOMParser();
-                         const docFromString = parser.parseFromString(sectionString, (item.mediaType || 'text/html') as DOMParserSupportedType);
-                         sectionText = extractTextRecursive(docFromString.body || docFromString.documentElement);
-                         if (sectionText) console.log("Fallback extraction successful."); else console.warn("Fallback extraction failed.");
-                     } catch (serializeError) {
-                         console.error("Error during fallback serialization:", serializeError);
-                     }
-                 }
-              } else if (typeof section === 'string') {
-                 const parser = new DOMParser();
-                 const doc = parser.parseFromString(section, (item.mediaType || 'text/html') as DOMParserSupportedType);
-                 sectionText = extractTextRecursive(doc.body || doc.documentElement);
-                 if(!sectionText) console.warn(`Failed to extract text from string section ${item.idref || item.href}.`);
-              } else if (section instanceof Blob || section instanceof ArrayBuffer) {
-                 const blob = (section instanceof ArrayBuffer) ? new Blob([section]) : section;
-                 const decodedText = await blob.text();
-                 const parser = new DOMParser();
-                 const doc = parser.parseFromString(decodedText, (item.mediaType || 'text/html') as DOMParserSupportedType);
-                 sectionText = extractTextRecursive(doc.body || doc.documentElement);
-                 if(!sectionText) console.warn(`Decoded binary section ${item.idref || item.href} but failed to extract text.`);
+              if (sectionDocument && sectionDocument.body) { // Check if it has a body element
+                sectionText = extractTextRecursive(sectionDocument.body);
               } else {
-                console.warn(`Skipping section ${i + 1} due to unexpected type: ${typeof section}`);
+                console.warn(`Skipping section ${i + 1} due to unexpected structure or load failure.`);
               }
 
               if (sectionText) {
@@ -460,7 +440,7 @@ export default function Home() {
                 console.warn(`Section ${i + 1} parsing yielded no text.`);
               }
             } catch (sectionError: any) {
-              console.error(`Error processing section ${i + 1}:`, sectionError.message || sectionError);
+              console.error(`Error processing section ${i + 1} (href: ${item.href}):`, sectionError.message || sectionError);
               sectionErrors++;
               fullText += `\n\n[Section ${i + 1} Skipped Due To Error: ${sectionError.message || 'Unknown error'}]\n\n`;
             }
@@ -502,7 +482,7 @@ export default function Home() {
         } finally {
             // Dismiss loading toast when done (success or error) using the controller
             if (toastCtrlRef.current) {
-                dismissToast(toastCtrlRef.current.id); // Use dismissToast function
+                dismiss(toastCtrlRef.current.id); // Use dismiss function
                 toastCtrlRef.current = null; // Clear ref after dismissing
             }
             if (book && typeof book.destroy === 'function') {
@@ -510,7 +490,7 @@ export default function Home() {
             }
         }
     });
-   }, [toast, dismissToast, extractTextRecursive]); // Include dismissToast
+   }, [toast, dismiss, extractTextRecursive]); // Include dismiss
 
 
   const handleFileUpload = useCallback(
@@ -566,7 +546,7 @@ export default function Home() {
 
          // Explicitly dismiss the loading toast *before* showing success/error
           if (loadingToastId && toastCtrlRef.current?.id === loadingToastId) {
-            dismissToast(loadingToastId);
+            dismiss(loadingToastId);
             toastCtrlRef.current = null;
           }
 
@@ -584,7 +564,7 @@ export default function Home() {
          console.error('Error loading file:', error);
           // Dismiss loading toast if it exists and hasn't been dismissed yet
          if (loadingToastId && toastCtrlRef.current?.id === loadingToastId) {
-            dismissToast(loadingToastId);
+            dismiss(loadingToastId);
             toastCtrlRef.current = null;
          }
          toast({ title: 'Error Loading File', description: error.message || 'Unknown error.', variant: 'destructive', duration: 7000 });
@@ -597,7 +577,7 @@ export default function Home() {
         }
       }
     },
-    [parseEpub, toast, dismissToast] // Include dismissToast
+    [parseEpub, toast, dismiss] // Include dismiss
   );
 
 
