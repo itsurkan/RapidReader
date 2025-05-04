@@ -311,163 +311,158 @@ export default function Home() {
 
 
    // Simplified recursive function to extract text, adding paragraph breaks
-   const extractTextRecursive = useCallback((node: Node): string => {
-       let currentText = '';
-       if (!node) return '';
+    const extractTextRecursive = useCallback((node: Node | null): string => {
+        let currentText = '';
+        if (!node) return '';
 
-       if (node.nodeType === Node.TEXT_NODE) {
-           const trimmed = node.textContent?.trim();
-           if (trimmed) {
-                // Add space if needed before appending
-                if (currentText.length > 0 && !/\s$/.test(currentText)) {
-                    currentText += ' ';
-                }
+        // Skip comment, script, and style nodes entirely
+        if (node.nodeType === Node.COMMENT_NODE || node.nodeName === 'SCRIPT' || node.nodeName === 'STYLE') {
+            return '';
+        }
+
+        if (node.nodeType === Node.TEXT_NODE) {
+            const trimmed = node.textContent?.trim();
+            if (trimmed) {
                 currentText += trimmed;
-           }
-       } else if (node.nodeType === Node.ELEMENT_NODE) {
-           const element = node as HTMLElement;
-           const tagName = element.tagName.toUpperCase();
-           const isBlock = ['P', 'DIV', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'LI', 'BLOCKQUOTE', 'PRE', 'HR', 'TABLE', 'TR', 'SECTION', 'ARTICLE', 'HEADER', 'FOOTER', 'ASIDE', 'NAV', 'UL', 'OL', 'BODY'].includes(tagName);
+            }
+        } else if (node.nodeType === Node.ELEMENT_NODE) {
+            const element = node as HTMLElement;
+            const tagName = element.tagName.toUpperCase();
+            const isBlock = ['P', 'DIV', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'LI', 'BLOCKQUOTE', 'PRE', 'HR', 'TABLE', 'TR', 'SECTION', 'ARTICLE', 'HEADER', 'FOOTER', 'ASIDE', 'NAV', 'UL', 'OL', 'BODY'].includes(tagName);
             const isLineBreak = tagName === 'BR';
 
-           // Add double newline *before* processing children of a block element, if text exists and not already ended with newline(s)
-           if (isBlock && currentText.length > 0 && !currentText.endsWith('\n')) {
+            // Add double newline *before* processing children of a block element, if needed
+            if (isBlock && currentText.length > 0 && !currentText.endsWith('\n')) {
                 currentText += '\n\n';
-           }
+            }
 
-           for (let i = 0; i < node.childNodes.length; i++) {
-                const childText = extractTextRecursive(node.childNodes[i]);
+            let prevChildWasText = false; // Track if the previous child added text
+            for (let i = 0; i < node.childNodes.length; i++) {
+                const childNode = node.childNodes[i];
+                const childText = extractTextRecursive(childNode); // Recursive call
+
                 if (childText) {
-                    // Add space if needed before appending child text, avoid double spaces or space before punctuation
-                    if (currentText.length > 0 && !/\s$/.test(currentText) && !/^\s/.test(childText) && !/^[.,!?;:]/.test(childText)) {
+                    // Add space *before* child text if the current text exists, doesn't end with space/newline,
+                    // AND the child text doesn't start with space/newline/punctuation.
+                    if (currentText.length > 0 && !/[\s\n]$/.test(currentText) && !/^[\s\n.,!?;:]/.test(childText)) {
                         currentText += ' ';
                     }
                     currentText += childText;
+                    prevChildWasText = childNode.nodeType === Node.TEXT_NODE || childNode.nodeType === Node.ELEMENT_NODE;
                 }
-           }
+            }
 
-            // Add double newline *after* processing children of a block element or BR, if text exists and not already ended with newline(s)
+            // Add double newline *after* processing children of a block element or BR, if needed
             if ((isBlock || isLineBreak) && currentText.length > 0 && !currentText.endsWith('\n')) {
                  currentText += '\n\n';
-           }
-       }
-       return currentText;
-   }, []);
+            }
+        }
+        return currentText;
+    }, []);
 
 
   const parseEpub = useCallback(async (file: File): Promise<string> => {
     const Epub = (await import('epubjs')).default;
     let book: Book | null = null;
-    let toastId: string | undefined; // Variable to hold the loading toast ID
+    let toastId: string | undefined;
 
-    // Show loading toast immediately
-     const loadingToast = toast({
+    toastCtrlRef.current = toast({
         title: 'Loading EPUB...',
         description: `Processing ${file.name}`
-     });
-     // Store the controller, not just the ID
-     toastCtrlRef.current = loadingToast;
-     toastId = loadingToast.id;
+    });
+    toastId = toastCtrlRef.current?.id;
 
-    return new Promise(async (resolve, reject) => { // Make the promise async
+    return new Promise(async (resolve, reject) => {
         try {
-          console.log("FileReader successful, attempting to load EPUB...");
-          const arrayBuffer = await file.arrayBuffer(); // Use await with arrayBuffer()
-          console.log(`EPUB ArrayBuffer size: ${arrayBuffer.byteLength}`);
+            const arrayBuffer = await file.arrayBuffer();
+            book = Epub(arrayBuffer);
 
-          book = Epub(arrayBuffer); // Removed encoding option
+            book.on('book:error', (err: any) => {
+                console.error('EPUB Book Error Event:', err);
+                reject(new Error(`EPUB loading error: ${err.message || 'Unknown error during book initialization.'} ${isLikelyDrmError(err) ? ' (Possible DRM)' : ''}`));
+            });
 
-          book.on('book:error', (err: any) => {
-            console.error('EPUB Book Error Event:', err);
-            reject(new Error(`EPUB loading error: ${err.message || 'Unknown error during book initialization.'} ${isLikelyDrmError(err) ? ' (Possible DRM)' : ''}`));
-          });
+            await book.ready;
+            console.log("book.ready resolved. Metadata:", book.metadata);
+            console.log("Processing spine items...");
 
-          console.log("EPUB instance created, awaiting book.ready...");
-          const readyTimeout = 45000;
-          const readyPromise = book.ready;
-          const timeoutPromise = new Promise((_, rejectTimeout) =>
-            setTimeout(() => rejectTimeout(new Error(`EPUB book.ready timed out after ${readyTimeout / 1000} seconds.`)), readyTimeout)
-          );
+            let fullText = '';
+            let sectionErrors = 0;
+            const totalSections = book.spine.items.length;
+            if (totalSections === 0) console.warn("EPUB spine contains no items.");
 
-          await Promise.race([readyPromise, timeoutPromise]);
-
-          console.log("book.ready resolved. Metadata:", book.metadata);
-          console.log("Processing spine items...");
-
-          let fullText = '';
-          let sectionErrors = 0;
-          const totalSections = book.spine.items.length;
-          if (totalSections === 0) {
-            console.warn("EPUB spine contains no items.");
-          }
-
-            // Process sections sequentially
+            // Use Promise.all to process sections concurrently (potentially faster)
+            // const sectionTexts = await Promise.all(book.spine.items.map(async (item) => {
+            // Use sequential processing for potentially better error handling context
+            const sectionTexts: string[] = [];
             for (const item of book.spine.items) {
+                let sectionText = '';
                 try {
                     console.log(`Loading section (href: ${item.href})...`);
-                    const section = book.section(item.href); // Get section by href using book.section
+                    const section: Section | undefined = await book.load(item.href); // Use book.load directly
                     if (!section) {
-                        console.warn(`Section not found in book instance (href: ${item.href})`);
-                        continue;
+                        console.warn(`Section not loaded or undefined (href: ${item.href})`);
+                        throw new Error("Section load returned undefined.");
                     }
 
-                    await section.load(book.load.bind(book)); // Load the section content using section.load
-                    if (!section.document) {
-                        console.warn(`Section loaded but document is null (href: ${item.href})`);
-                        continue;
+                    // await section.load(); // This might be redundant or incorrect depending on epubjs version/usage
+                    const body = await section.render?.(); // Use render() to get HTML content
+                    if (!body) {
+                        console.warn(`Section rendered no body content (href: ${item.href})`);
+                        throw new Error("Section render returned no content.");
                     }
 
-                    // Ensure section.document.body exists before parsing
-                    if (section.document.body) {
-                        const sectionText = extractTextRecursive(section.document.body);
-                        if (sectionText) {
-                            const trimmedSectionText = sectionText.trim();
-                            if (fullText.length > 0 && !fullText.endsWith('\n\n')) {
-                                fullText += '\n\n';
-                            } else if (fullText.length > 0 && !fullText.endsWith('\n')) {
-                                fullText += '\n';
-                            }
-                            fullText += trimmedSectionText;
-                        } else {
+                    // Parse the HTML body string
+                    const parser = new DOMParser();
+                    const doc = parser.parseFromString(body, 'text/html');
+
+                    if (doc.body) {
+                        sectionText = extractTextRecursive(doc.body);
+                        if (!sectionText) {
                             console.warn(`Section parsing yielded no text (href: ${item.href}).`);
                         }
                     } else {
-                        console.warn(`Skipping section due to missing body element (href: ${item.href}).`);
+                        console.warn(`Skipping section due to missing body element after parsing (href: ${item.href}).`);
+                        throw new Error("Parsed document has no body element.");
                     }
-
-                } catch (sectionError: any) {
-                    console.error(`Error processing section (href: ${item.href}):`, sectionError.message || sectionError);
-                    sectionErrors++;
-                    fullText += `\n\n[Section Skipped Due To Error: ${sectionError.message || 'Unknown error'}]\n\n`;
-                }
+                 } catch (sectionError: any) {
+                     console.error(`Error processing section (href: ${item.href}):`, sectionError.message || sectionError);
+                     sectionErrors++;
+                     // Add error placeholder instead of throwing, allows continuing
+                     sectionText = `\n\n[Section Skipped Due To Error: ${sectionError.message || 'Unknown error'}]\n\n`;
+                 }
+                 sectionTexts.push(sectionText.trim());
             }
 
+            // Join section texts with double newlines
+            fullText = sectionTexts.filter(Boolean).join('\n\n');
 
-          console.log(`Processed ${totalSections} sections with ${sectionErrors} errors.`);
+            // Cleanup whitespace
+            fullText = fullText.replace(/[ \t]{2,}/g, ' ').replace(/(\r\n|\r|\n)[ \t]*(\r\n|\r|\n)/g, '\n\n').replace(/(\n\n){2,}/g, '\n\n').trim();
 
-          fullText = fullText.replace(/[ \t]{2,}/g, ' ').replace(/(\r\n|\r|\n)[ \t]*(\r\n|\r|\n)/g, '\n\n').replace(/(\n\n){2,}/g, '\n\n').trim();
-          console.log(`Total extracted text length: ${fullText.length}`);
+            console.log(`Processed ${totalSections} sections with ${sectionErrors} errors.`);
+            console.log(`Total extracted text length: ${fullText.length}`);
 
-          if (fullText.length === 0 && totalSections > 0) {
-             const errorMsg = sectionErrors === totalSections ?
-                `Failed to extract any text. All ${totalSections} sections failed.` :
-                "EPUB parsing yielded no text. File might be empty, image-based, or DRM protected.";
-             console.error(errorMsg);
-             reject(new Error(errorMsg));
-          } else {
-             if (sectionErrors > 0) {
-                 console.warn(`EPUB parsed with ${sectionErrors} errors. Content might be incomplete.`);
-                 toast({
-                   title: 'Parsing Warning',
-                   description: `EPUB parsed with ${sectionErrors} error(s). Some content might be missing.`,
-                   variant: 'destructive',
-                   duration: 5000,
-                 });
-              } else {
-                 console.log("EPUB parsing successful.");
-              }
-             resolve(fullText);
-          }
+            if (fullText.length === 0 && totalSections > 0) {
+                const errorMsg = sectionErrors === totalSections ?
+                    `Failed to extract any text. All ${totalSections} sections failed.` :
+                    "EPUB parsing yielded no text. File might be empty, image-based, or DRM protected.";
+                console.error(errorMsg);
+                reject(new Error(errorMsg));
+            } else {
+                if (sectionErrors > 0) {
+                    console.warn(`EPUB parsed with ${sectionErrors} errors. Content might be incomplete.`);
+                    toast({
+                        title: 'Parsing Warning',
+                        description: `EPUB parsed with ${sectionErrors} error(s). Some content might be missing.`,
+                        variant: 'destructive',
+                        duration: 5000,
+                    });
+                } else {
+                    console.log("EPUB parsing successful.");
+                }
+                resolve(fullText);
+            }
         } catch (error: any) {
             console.error("Critical EPUB Processing Error:", error);
             let errorMessage = "Error parsing EPUB file.";
@@ -478,17 +473,16 @@ export default function Home() {
             else errorMessage += " Unexpected error.";
             reject(new Error(errorMessage));
         } finally {
-            // Dismiss loading toast when done (success or error) using the controller
-            if (toastCtrlRef.current) {
-                dismiss(toastCtrlRef.current.id); // Use dismiss function
-                toastCtrlRef.current = null; // Clear ref after dismissing
+            if (toastId && toastCtrlRef.current?.id === toastId) {
+                 dismiss(toastId); // Use dismiss function
+                 toastCtrlRef.current = null;
             }
             if (book && typeof book.destroy === 'function') {
                 try { book.destroy(); } catch (destroyError) { console.warn("Error destroying book instance:", destroyError); }
             }
         }
     });
-   }, [toast, dismiss, extractTextRecursive]); // Include dismiss
+   }, [toast, dismiss, extractTextRecursive]); // Include dismiss and extractTextRecursive
 
 
   const handleFileUpload = useCallback(
@@ -556,7 +550,7 @@ export default function Home() {
          } else if (wordCount === 0) {
              throw new Error("The file contains no readable words (only punctuation/symbols?).");
          } else {
-             toast({ title: 'File Loaded', description: `${file.name} ready.` });
+             toast({ title: 'File Loaded', description: `${file.name} is ready for reading.` });
          }
       } catch (error: any) {
          console.error('Error loading file:', error);
