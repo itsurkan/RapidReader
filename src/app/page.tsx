@@ -7,7 +7,7 @@ import { ReaderControls } from '@/components/reader-controls';
 import { ReadingDisplay } from '@/components/reading-display';
 import { Progress } from '@/components/ui/progress';
 import { useReaderState } from '@/hooks/useReaderState';
-import { calculatePivot } from '@/lib/pivotUtils'; // Import pivot calculation
+import { calculatePivot } from '@/lib/readingUtils'; // Corrected import path
 
 export default function Home() {
     const {

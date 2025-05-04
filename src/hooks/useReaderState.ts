@@ -1,10 +1,11 @@
 
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { useToast } from '@/hooks/use-toast';
-import { isActualWord, getPunctuationType } from '@/lib/readingUtils';
+import { isActualWord } from '@/lib/wordUtils'; // Assuming this file exists and is correct
+import { getPunctuationType } from '@/lib/punctuationUtils'; // Assuming this file exists and is correct
 import { findChunkInfo } from '@/lib/chunkingLogic';
 import { findPreviousChunkStart, findChunkStartForWordIndex } from '@/lib/chunkNavigation';
-import { parseEpub } from '@/lib/epubParser'; // Assuming epubParser is correctly typed
+import { parseEpub } from '@/lib/epub/epubParser'; // Use alias path
 
 interface ToastController {
   id: string;
@@ -26,7 +27,7 @@ export function useReaderState() {
 
   const timeoutRef = useRef<NodeJS.Timeout | null>(null);
   const toastCtrlRef = useRef<ToastController | null>(null);
-  const { toast, dismiss } = useToast();
+  const { toast, dismiss } = useToast(); // Use dismiss directly from hook
 
   // --- Core Reading Logic ---
 
@@ -35,23 +36,26 @@ export function useReaderState() {
     return (60 / effectiveWpm) * 1000;
   }, [wpm]);
 
+  // Memoize the result of findChunkInfo for the current index
+  const currentChunkInfo = useMemo(() =>
+    findChunkInfo(currentIndex, chunkWordTarget, words),
+    [currentIndex, chunkWordTarget, words]
+  );
+
   // Determine delay multiplier based on punctuation *before* the current chunk
   const currentChunkPunctuationInfo = useMemo(() => {
     if (currentIndex <= 0 || currentIndex > words.length) return { delayMultiplier: 1.0 };
+    // Check the punctuation type of the *last token of the previous chunk*
     const previousTokenIndex = currentIndex - 1;
     const previousToken = words[previousTokenIndex];
     const punctuationType = getPunctuationType(previousToken);
+
     if (punctuationType === 'sentence' || punctuationType === 'clause') {
       return { delayMultiplier: 3.0 }; // Triple delay after sentence/clause ends
     }
     return { delayMultiplier: 1.0 };
   }, [currentIndex, words]);
 
-  // Memoize the result of findChunkInfo for the current index
-  const currentChunkInfo = useMemo(() =>
-    findChunkInfo(currentIndex, chunkWordTarget, words),
-    [currentIndex, chunkWordTarget, words]
-  );
 
   // Effect to update the adjustment state based on the memoized chunk info
   useEffect(() => {
@@ -167,10 +171,11 @@ export function useReaderState() {
 
         console.log(`File content length: ${fileContent.length}`);
         setText(fileContent);
-        const newWords = fileContent.split(/[\s\n]+/).filter(token => token.length > 0);
-        console.log(`Extracted ${newWords.length} tokens.`);
-        setWords(newWords);
-        const wordCount = newWords.filter(isActualWord).length;
+        // Split by one or more whitespace or newline characters
+        const newTokens = fileContent.split(/[\s\n]+/).filter(token => token.length > 0);
+        console.log(`Extracted ${newTokens.length} tokens.`);
+        setWords(newTokens);
+        const wordCount = newTokens.filter(isActualWord).length;
         setActualWordCount(wordCount);
         console.log(`Counted ${wordCount} actual words.`);
 
@@ -184,9 +189,9 @@ export function useReaderState() {
          }
 
 
-        if (newWords.length === 0 && fileContent.length > 0) {
+        if (newTokens.length === 0 && fileContent.length > 0) {
             throw new Error("File loaded, but no tokens extracted. Check content format.");
-        } else if (newWords.length === 0) {
+        } else if (newTokens.length === 0) {
             throw new Error("The file appears to be empty.");
         } else if (wordCount === 0) {
             throw new Error("The file contains no readable words (only punctuation/symbols?).");
@@ -212,7 +217,7 @@ export function useReaderState() {
          }
       }
     },
-    [parseEpub, toast, dismiss] // Include dismiss in dependency array
+    [toast, dismiss] // Include dismiss in dependency array
   );
 
   // --- Control Actions ---

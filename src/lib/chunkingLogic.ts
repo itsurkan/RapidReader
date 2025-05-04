@@ -158,7 +158,7 @@ export const findChunkInfo = (
         const maxWordsAllowed = targetWordCount + maxWordOverflow;
 
         // Case 1a: The sentence fits within the allowed limit (target + overflow)
-        if (sentenceChunkWordCount <= maxWordsAllowed) {
+        if (sentenceChunkWordCount <= maxWordsAllowed && sentenceChunkWordCount > 0) { // Ensure sentence has words
              // Check if the word count is exactly the target or less, or if it's an overflow adjustment
              const adjusted = sentenceChunkWordCount > targetWordCount;
              // console.log(`Chunking: Found sentence end at ${sentenceEndIndex}. Fits limit (${sentenceChunkWordCount} <= ${maxWordsAllowed}). Adjusted: ${adjusted}`);
@@ -168,9 +168,9 @@ export const findChunkInfo = (
                 isAdjusted: adjusted,
             };
         }
-        // Case 1b: The sentence is too long, use secondary splitting
+        // Case 1b: The sentence is too long or has 0 words, use secondary splitting
         else {
-             // console.log(`Chunking: Found sentence end at ${sentenceEndIndex}, but too long (${sentenceChunkWordCount} > ${maxWordsAllowed}). Using secondary split.`);
+            // console.log(`Chunking: Found sentence end at ${sentenceEndIndex}, but too long (${sentenceChunkWordCount} > ${maxWordsAllowed}) or 0 words. Using secondary split.`);
             return findSecondarySplitPoint(startIndex, targetWordCount, maxWordOverflow, allTokens);
         }
     }
