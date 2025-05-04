@@ -17,7 +17,10 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <body className={`${inter.className} antialiased`}>
+      <body
+        className={`${inter.className} antialiased`}
+        suppressHydrationWarning={true} // Add this line to suppress hydration warnings
+      >
         {children}
         <Toaster /> {/* Add Toaster component */}
       </body>
