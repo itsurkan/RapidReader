@@ -33,7 +33,8 @@ const getPunctuationType = (token: string): 'sentence' | 'clause' | 'none' => {
 const findChunkInfo = (
     startIndex: number,
     targetWordCount: number, // Approximate target words per displayed chunk
-    allTokens: string[]
+    allTokens: string[],
+    maxWordExtension: number = 3 // Maximum words to exceed targetWordCount
 ): { endIndex: number; actualWordsInChunk: number } => {
     if (startIndex >= allTokens.length) {
         return { endIndex: startIndex, actualWordsInChunk: 0 };
@@ -74,46 +75,73 @@ const findChunkInfo = (
         }
 
 
-        // If we reach the target word count *and* the current token isn't punctuation (or it's just clause punctuation without enough following words), check if doubling words gets us closer to punctuation.
+        // If we reach the target word count *and* the current token isn't sentence punctuation, check lookahead.
         if (wordsInCurrentChunk >= targetWordCount && punctuationFound !== 'sentence') {
-            // Dynamic chunk size adjustment: Look ahead
-             let lookaheadIndex = currentIndex;
+            // Dynamic chunk size adjustment: Look ahead for punctuation
+             let lookaheadIndex = currentIndex; // Start looking from the *next* token
              let lookaheadWords = 0;
-             let lookaheadPunctuation: 'sentence' | 'clause' | 'none' = 'none';
              let foundPunctuationAhead = false;
+             let firstPunctuationIndex = -1;
 
-             while(lookaheadIndex < allTokens.length && lookaheadWords < targetWordCount) {
+             // Look ahead up to `maxWordExtension` additional *words* (or end of text)
+             while(lookaheadIndex < allTokens.length) {
                  const nextToken = allTokens[lookaheadIndex];
                  if (isActualWord(nextToken)) {
                      lookaheadWords++;
                  }
-                 lookaheadPunctuation = getPunctuationType(nextToken);
-                 if (lookaheadPunctuation === 'sentence' || lookaheadPunctuation === 'clause') {
+                  // Stop looking if we exceed the max allowed extension
+                 if (lookaheadWords > maxWordExtension && firstPunctuationIndex === -1) {
+                      break;
+                 }
+
+                 const lookaheadPunctuationType = getPunctuationType(nextToken);
+                 if (lookaheadPunctuationType === 'sentence' || lookaheadPunctuationType === 'clause') {
                      foundPunctuationAhead = true;
-                     break;
+                     firstPunctuationIndex = lookaheadIndex;
+                     break; // Found the first significant punctuation
                  }
                  lookaheadIndex++;
              }
 
-            // If we found punctuation within the next `targetWordCount` words, extend the chunk to include it.
-             if (foundPunctuationAhead) {
-                // Extend currentIndex to include the punctuation and potentially following tokens if they are part of the same 'unit'
-                currentIndex = lookaheadIndex + 1; // Include the token with punctuation
-                // Recalculate words in the now potentially longer chunk
-                wordsInCurrentChunk = 0;
-                for (let i = startIndex; i < currentIndex; i++) {
+            // If we found punctuation within the allowed extension range
+            if (foundPunctuationAhead && firstPunctuationIndex !== -1) {
+                // Calculate words if we extend to the found punctuation
+                let wordsIfExtended = 0;
+                for (let i = startIndex; i <= firstPunctuationIndex; i++) {
                     if (isActualWord(allTokens[i])) {
-                        wordsInCurrentChunk++;
+                        wordsIfExtended++;
                     }
                 }
-                 break; // Break after extending
-             } else {
-                // If no punctuation found soon, just break at the current target word count.
-                 // Only break here if no significant punctuation was found in *this* token itself.
+
+                // Only extend if it doesn't exceed the target + max extension limit *too much*
+                // (Allow slight overrun to include the punctuation itself)
+                if (wordsIfExtended <= targetWordCount + maxWordExtension) {
+                    currentIndex = firstPunctuationIndex + 1; // Extend chunk to include punctuation
+                    // Recalculate words in the extended chunk (important!)
+                    wordsInCurrentChunk = wordsIfExtended;
+                    break; // Break after extending
+                } else {
+                    // Exceeded limit even with lookahead, break where we were (before lookahead)
+                    currentIndex--; // Go back one step as the current loop incremented it already
+                    // Correct wordsInCurrentChunk if the token we backed off from was a word
+                    if (isActualWord(allTokens[currentIndex])) {
+                        wordsInCurrentChunk--;
+                    }
+                    break;
+                }
+            } else {
+                // No punctuation found within allowed range, or lookahead wasn't triggered.
+                // Break at the current point if it's not punctuation, or if it's clause punctuation without enough following words (handled earlier).
                  if (punctuationFound === 'none') {
                     break;
                  }
-             }
+                 // If the current token *is* clause punctuation but didn't trigger the break earlier,
+                 // it means we didn't have enough words *since the last significant punctuation*.
+                 // In this case, we *should* break here.
+                 if (punctuationFound === 'clause') {
+                    break;
+                 }
+            }
         }
     }
 
@@ -128,16 +156,19 @@ const findChunkInfo = (
         }
     }
 
-     // Ensure at least one token is always included if possible, even if it exceeds target count slightly due to punctuation rule.
+     // Ensure at least one token is always included if possible
      const finalEndIndex = (endIndex === startIndex && startIndex < allTokens.length) ? startIndex + 1 : endIndex;
 
-    // Recalculate actual words for the *final* chunk
-    let finalActualWordsCount = 0;
-    for (let i = startIndex; i < finalEndIndex; i++) {
-        if (isActualWord(allTokens[i])) {
-            finalActualWordsCount++;
-        }
-    }
+    // Recalculate actual words for the *final* chunk if finalEndIndex changed
+    let finalActualWordsCount = actualWordsCount;
+     if (finalEndIndex !== endIndex) {
+         finalActualWordsCount = 0;
+         for (let i = startIndex; i < finalEndIndex; i++) {
+             if (isActualWord(allTokens[i])) {
+                 finalActualWordsCount++;
+             }
+         }
+     }
 
 
     return { endIndex: finalEndIndex, actualWordsInChunk: finalActualWordsCount };
@@ -152,66 +183,38 @@ const findPreviousChunkStart = (
 ): number => {
     if (currentStartIndex <= 0) return 0;
 
-    let wordsToGoBack = targetWordCount;
-    let previousIndex = currentStartIndex - 1;
-    let actualWordsFound = 0;
-    let sentencePunctuationMet = false;
-
-    // First pass: Go back roughly targetWordCount actual words, stopping at sentence punctuation
-    while (previousIndex >= 0 && actualWordsFound < targetWordCount) {
-        const token = allTokens[previousIndex];
-        if (isActualWord(token)) {
-            actualWordsFound++;
-        }
-        if (getPunctuationType(token) === 'sentence' && actualWordsFound > 0) {
-             sentencePunctuationMet = true;
-             previousIndex++; // Start *after* the sentence punctuation
-            break;
-        }
-        previousIndex--;
-    }
-
-    // If we stopped exactly at the beginning, return 0
-    if (previousIndex < 0) return 0;
-
-     // If we stopped due to sentence punctuation, start the chunk from there.
-     if (sentencePunctuationMet) {
-         return previousIndex;
-     }
-
-
-    // If we went back roughly targetWordCount without hitting sentence end,
-    // we now need to find the *start* of the chunk containing this `previousIndex`.
-    // We do this by simulating `findChunkInfo` starting from the beginning until it includes `previousIndex`.
+    // We need to find the chunk that *ends* at or before `currentStartIndex`.
+    // Simulate chunk finding from the beginning.
     let simulatedStartIndex = 0;
     let lastValidStartIndex = 0;
-    while (simulatedStartIndex <= previousIndex) {
-         lastValidStartIndex = simulatedStartIndex;
+    while (simulatedStartIndex < currentStartIndex) {
+         lastValidStartIndex = simulatedStartIndex; // Store the start of the potential previous chunk
+         // Use targetWordCount for finding chunks consistently
          const { endIndex } = findChunkInfo(simulatedStartIndex, targetWordCount, allTokens);
-         if (endIndex <= simulatedStartIndex) break; // Avoid infinite loop if findChunkInfo stalls
-         simulatedStartIndex = endIndex;
+         if (endIndex <= simulatedStartIndex) break; // Avoid infinite loop
+         simulatedStartIndex = endIndex; // Move to the start of the *next* chunk
     }
 
-    // The start of the previous chunk is the last valid start index we found
+    // The start of the previous chunk is the last valid start index we recorded.
     return lastValidStartIndex;
 };
 
 
 export default function Home() {
   const [text, setText] = useState<string>('');
-  const [tokens, setTokens] = useState<string[]>([]); // Tokens are now split by whitespace
+  const [words, setWords] = useState<string[]>([]); // Changed from tokens back to words for clarity, but logic uses tokens
   const [actualWordCount, setActualWordCount] = useState<number>(0);
-  const [currentIndex, setCurrentIndex] = useState<number>(0); // Index in the tokens array
+  const [currentIndex, setCurrentIndex] = useState<number>(0); // Index in the words array
   const [wpm, setWpm] = useState<number>(300);
   const [chunkWordTarget, setChunkWordTarget] = useState<number>(2); // Target *approximate words* per chunk display
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
   const [fileName, setFileName] = useState<string | null>(null);
   const [progress, setProgress] = useState<number>(0);
-  const [isAdjustingChunk, setIsAdjustingChunk] = useState<boolean>(false); // Maybe reuse later if needed
 
   // Ref for managing setTimeout
   const timeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const { toast, dismiss } = useToast();
+  const { toast } = useToast();
+  const toastRef = useRef<ReturnType<typeof toast> | null>(null); // Ref to store toast ID
 
   // Function to calculate base interval delay per *word* based on WPM
   const calculateWordInterval = useCallback(() => {
@@ -268,21 +271,19 @@ export default function Home() {
   const parseEpub = useCallback(async (file: File): Promise<string> => {
     const Epub = (await import('epubjs')).default;
     let book: Book | null = null;
+    let toastId: string | undefined; // Variable to hold the loading toast ID
 
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = async (e) => {
-        if (!e.target?.result) {
-          console.error("FileReader onload event triggered, but e.target.result is null or undefined.");
-          return reject(new Error("Failed to read EPUB file content (FileReader result was empty)."));
-        }
+    // Show loading toast immediately
+    const loadingToast = toast({ title: 'Loading EPUB...', description: `Processing ${file.name}` });
+    toastId = loadingToast.id; // Store the ID
+
+    return new Promise(async (resolve, reject) => { // Make the promise async
         try {
           console.log("FileReader successful, attempting to load EPUB...");
-          const arrayBuffer = e.target.result as ArrayBuffer;
+          const arrayBuffer = await file.arrayBuffer(); // Use await with arrayBuffer()
           console.log(`EPUB ArrayBuffer size: ${arrayBuffer.byteLength}`);
 
-          // Explicitly pass encoding option
-          book = Epub(arrayBuffer, { encoding: 'binary' }); // or 'base64' if that's how you read it, binary often works
+          book = Epub(arrayBuffer, { encoding: 'binary' });
 
           book.on('book:error', (err: any) => {
             console.error('EPUB Book Error Event:', err);
@@ -290,9 +291,7 @@ export default function Home() {
           });
 
           console.log("EPUB instance created, awaiting book.ready...");
-
-          // Increased timeout for book.ready as it can take time for larger/complex EPUBs
-          const readyTimeout = 45000; // 45 seconds
+          const readyTimeout = 45000;
           const readyPromise = book.ready;
           const timeoutPromise = new Promise((_, rejectTimeout) =>
             setTimeout(() => rejectTimeout(new Error(`EPUB book.ready timed out after ${readyTimeout / 1000} seconds.`)), readyTimeout)
@@ -306,448 +305,268 @@ export default function Home() {
           let fullText = '';
           let sectionErrors = 0;
           const totalSections = book.spine.items.length;
-           if (totalSections === 0) {
-                console.warn("EPUB spine contains no items. The book might be empty or structured incorrectly.");
-           }
+          if (totalSections === 0) {
+            console.warn("EPUB spine contains no items.");
+          }
 
           for (let i = 0; i < totalSections; i++) {
             const item = book.spine.items[i];
             try {
-                console.log(`Loading section ${i + 1}/${totalSections} (ID: ${item.idref || 'unknown'}, Href: ${item.href})...`);
-
-                // Increased timeout per section
-                const loadTimeout = 20000; // 20 seconds per section
-                const sectionLoadPromise = item.load(book.load.bind(book)).then(sectionContent => {
-                    if (!sectionContent) {
-                        // Try reloading once on null content, could be a transient issue
-                        console.warn(`Initial load of section ${item.idref || item.href} returned null. Retrying...`);
-                        return item.load(book.load.bind(book)).then(retryContent => {
-                            if (!retryContent) {
-                                throw new Error(`Section ${item.idref || item.href} load resulted in null or undefined content even after retry.`);
-                            }
-                            return retryContent;
-                        });
-                    }
-                    return sectionContent;
-                });
-
-
-                const sectionTimeoutPromise = new Promise((_, rejectSectionTimeout) =>
-                  setTimeout(() => rejectSectionTimeout(new Error(`Loading section ${item.idref || item.href} timed out after ${loadTimeout / 1000} seconds.`)), loadTimeout)
-                );
-
-                const section = await Promise.race([sectionLoadPromise, sectionTimeoutPromise]) as Document | string | any;
-
-                console.log(`Section ${item.idref || item.href} loaded. Type: ${typeof section}`);
-
-                let sectionText = '';
-                if (section && typeof (section as any).querySelector === 'function') {
-                    // Prioritize extracting from body, but have fallbacks
-                    const body = (section as Document).body;
-                    const docElement = (section as Document).documentElement;
-
-                    if (body) {
-                        console.log(`Extracting text from body of section ${item.idref || item.href}.`);
-                        sectionText = extractTextRecursive(body);
-                    } else if (docElement) {
-                        console.warn(`Section ${item.idref || item.href} loaded but body element not found. Trying documentElement.`);
-                        sectionText = extractTextRecursive(docElement);
-                    }
-                    // Add a fallback to serialize the whole section if body/documentElement fails
-                     if (!sectionText && docElement) {
-                         console.warn(`Falling back to serializing entire documentElement for section ${item.idref || item.href}.`);
-                         try {
-                            const serializer = new XMLSerializer();
-                            const sectionString = serializer.serializeToString(docElement);
-                             const parser = new DOMParser();
-                             const docFromString = parser.parseFromString(sectionString, 'text/html');
-                             sectionText = extractTextRecursive(docFromString.body || docFromString.documentElement);
-                             if (sectionText) console.log("Fallback serialization extraction successful.");
-                             else console.warn("Fallback serialization extraction failed.");
-                         } catch (serializeError) {
-                             console.error("Error during fallback serialization:", serializeError);
-                         }
-                     }
-
-
-                    if (!sectionText) {
-                         console.warn(`Initial extraction failed for section ${item.idref || item.href}. No text extracted from DOM structure.`);
-                    }
-
-                } else if (typeof section === 'string') {
-                    console.warn(`Section ${item.idref || item.href} loaded as a string. Attempting basic HTML parse.`);
-                    const parser = new DOMParser();
-                    // Ensure parsing as text/html or application/xhtml+xml based on item's media type if available
-                    const mediaType = item.mediaType || 'text/html';
-                    const doc = parser.parseFromString(section, mediaType as DOMParserSupportedType);
-                    sectionText = extractTextRecursive(doc.body || doc.documentElement);
-                    if(sectionText) {
-                       console.log(`Extracted text from string-based section ${item.idref || item.href}.`);
-                    } else {
-                       console.warn(`Failed to extract text from string-based section ${item.idref || item.href}. Content might be non-HTML or empty.`);
-                    }
-                } else if (section instanceof Blob || section instanceof ArrayBuffer) {
-                    console.warn(`Section ${item.idref || item.href} loaded as Blob/ArrayBuffer. Attempting text decode.`);
-                    try {
-                        const blob = (section instanceof ArrayBuffer) ? new Blob([section]) : section;
-                        const decodedText = await blob.text(); // Assumes UTF-8, might need encoding detection
-                         const parser = new DOMParser();
-                          const mediaType = item.mediaType || 'text/html';
-                         const doc = parser.parseFromString(decodedText, mediaType as DOMParserSupportedType);
-                         sectionText = extractTextRecursive(doc.body || doc.documentElement);
-                         if(sectionText) {
-                           console.log(`Successfully decoded and extracted text from binary section ${item.idref || item.href}.`);
-                         } else {
-                             console.warn(`Decoded binary section ${item.idref || item.href} but failed to extract meaningful text.`);
-                         }
-                    } catch (decodeError) {
-                         console.error(`Failed to decode or parse binary section ${item.idref || item.href}:`, decodeError);
-                    }
-
-                } else {
-                    console.warn(`Skipping section ${item.idref || item.href} due to unexpected content type:`, typeof section, section);
+              console.log(`Loading section ${i + 1}/${totalSections}...`);
+              const loadTimeout = 20000;
+              const sectionLoadPromise = item.load(book.load.bind(book)).then(sectionContent => {
+                if (!sectionContent) {
+                  console.warn(`Initial load of section ${item.idref || item.href} returned null. Retrying...`);
+                  return item.load(book.load.bind(book)).then(retryContent => {
+                    if (!retryContent) throw new Error(`Section ${item.idref || item.href} load resulted in null content after retry.`);
+                    return retryContent;
+                  });
                 }
+                return sectionContent;
+              });
+              const sectionTimeoutPromise = new Promise((_, rejectSectionTimeout) =>
+                setTimeout(() => rejectSectionTimeout(new Error(`Loading section ${item.idref || item.href} timed out.`)), loadTimeout)
+              );
 
-                 if (sectionText) {
-                    // Trim section text first before checking/adding separators
-                    sectionText = sectionText.trim();
-                     if (fullText.length > 0 && !fullText.endsWith('\n\n')) {
-                         // Add a double newline if the previous text didn't end with one
-                         fullText += '\n\n';
-                     } else if (fullText.length > 0 && !fullText.endsWith('\n')) {
-                          // Add a single newline if the previous text didn't end with any newline
-                          // This case might be less common due to extractTextRecursive's block handling
-                         fullText += '\n';
+              const section = await Promise.race([sectionLoadPromise, sectionTimeoutPromise]) as Document | string | any;
+              console.log(`Section ${i + 1} loaded. Type: ${typeof section}`);
+
+              let sectionText = '';
+              if (section && typeof section.querySelector === 'function') {
+                sectionText = extractTextRecursive(section.body || section.documentElement);
+                 if (!sectionText && section.documentElement) { // Fallback
+                     console.warn(`Falling back to serializing entire documentElement for section ${item.idref || item.href}.`);
+                     try {
+                         const serializer = new XMLSerializer();
+                         const sectionString = serializer.serializeToString(section.documentElement);
+                         const parser = new DOMParser();
+                         const docFromString = parser.parseFromString(sectionString, item.mediaType || 'text/html' as DOMParserSupportedType);
+                         sectionText = extractTextRecursive(docFromString.body || docFromString.documentElement);
+                         if (sectionText) console.log("Fallback extraction successful."); else console.warn("Fallback extraction failed.");
+                     } catch (serializeError) {
+                         console.error("Error during fallback serialization:", serializeError);
                      }
-                     fullText += sectionText; // Append the trimmed section text
-                 } else {
-                     console.warn(`Section ${item.idref || item.href} parsing yielded no text.`);
                  }
+              } else if (typeof section === 'string') {
+                 const parser = new DOMParser();
+                 const doc = parser.parseFromString(section, item.mediaType || 'text/html' as DOMParserSupportedType);
+                 sectionText = extractTextRecursive(doc.body || doc.documentElement);
+                 if(!sectionText) console.warn(`Failed to extract text from string section ${item.idref || item.href}.`);
+              } else if (section instanceof Blob || section instanceof ArrayBuffer) {
+                 const blob = (section instanceof ArrayBuffer) ? new Blob([section]) : section;
+                 const decodedText = await blob.text();
+                 const parser = new DOMParser();
+                 const doc = parser.parseFromString(decodedText, item.mediaType || 'text/html' as DOMParserSupportedType);
+                 sectionText = extractTextRecursive(doc.body || doc.documentElement);
+                 if(!sectionText) console.warn(`Decoded binary section ${item.idref || item.href} but failed to extract text.`);
+              } else {
+                console.warn(`Skipping section ${i + 1} due to unexpected type: ${typeof section}`);
+              }
 
+              if (sectionText) {
+                sectionText = sectionText.trim();
+                if (fullText.length > 0 && !fullText.endsWith('\n\n')) {
+                  fullText += '\n\n';
+                } else if (fullText.length > 0 && !fullText.endsWith('\n')) {
+                  fullText += '\n';
+                }
+                fullText += sectionText;
+              } else {
+                console.warn(`Section ${i + 1} parsing yielded no text.`);
+              }
             } catch (sectionError: any) {
-                console.error(`Error processing section ${i + 1}/${totalSections} (ID: ${item.idref || item.href}):`, sectionError.message || sectionError);
-                sectionErrors++;
-                 fullText += `\n\n[Section "${item.idref || item.href || 'Unknown'}" Skipped Due To Error: ${sectionError.message || 'Unknown error'}]\n\n`;
+              console.error(`Error processing section ${i + 1}:`, sectionError.message || sectionError);
+              sectionErrors++;
+              fullText += `\n\n[Section ${i + 1} Skipped Due To Error: ${sectionError.message || 'Unknown error'}]\n\n`;
             }
           }
-          console.log(`Finished processing ${totalSections} sections with ${sectionErrors} errors.`);
+          console.log(`Processed ${totalSections} sections with ${sectionErrors} errors.`);
 
-           // Post-processing cleanup
-           fullText = fullText.replace(/[ \t]{2,}/g, ' '); // Consolidate multiple spaces/tabs
-           fullText = fullText.replace(/(\r\n|\r|\n)[ \t]*(\r\n|\r|\n)/g, '\n\n'); // Normalize paragraph breaks
-           fullText = fullText.replace(/(\n\n){2,}/g, '\n\n'); // Consolidate multiple paragraph breaks
-           fullText = fullText.trim();
-           console.log(`Extracted text length (after cleanup): ${fullText.length}`);
+          fullText = fullText.replace(/[ \t]{2,}/g, ' ').replace(/(\r\n|\r|\n)[ \t]*(\r\n|\r|\n)/g, '\n\n').replace(/(\n\n){2,}/g, '\n\n').trim();
+          console.log(`Total extracted text length: ${fullText.length}`);
 
-           if (fullText.length === 0 && totalSections > 0 && sectionErrors === totalSections) {
-                console.error("EPUB parsing failed completely. All sections encountered errors.");
-               reject(new Error(`Failed to extract any text content. All ${totalSections} sections failed to load or parse.`));
-           } else if (fullText.length === 0 && totalSections > 0) {
-                console.warn("EPUB parsing resulted in zero text content, though some sections might have loaded without errors. The file might be empty, contain only images/unparsable content, or be DRM protected.");
-                 reject(new Error("Failed to extract any readable text from the EPUB. It might be image-based, empty, or DRM protected."));
-           }
-           else {
-                if (sectionErrors > 0) {
-                   console.warn(`EPUB parsed with ${sectionErrors} section error(s). Extracted text might be incomplete.`);
-                   toast({
-                     title: 'Parsing Warning',
-                     description: `EPUB parsed with ${sectionErrors} error(s). Some content might be missing or skipped.`,
-                     variant: 'destructive',
-                     duration: 5000,
-                   });
-                } else {
-                   console.log("EPUB parsing and text extraction successful.");
-                }
-                resolve(fullText);
-           }
-
+          if (fullText.length === 0 && totalSections > 0) {
+             const errorMsg = sectionErrors === totalSections ?
+                `Failed to extract any text. All ${totalSections} sections failed.` :
+                "EPUB parsing yielded no text. File might be empty, image-based, or DRM protected.";
+             console.error(errorMsg);
+             reject(new Error(errorMsg));
+          } else {
+             if (sectionErrors > 0) {
+                 console.warn(`EPUB parsed with ${sectionErrors} errors. Content might be incomplete.`);
+                 toast({
+                   title: 'Parsing Warning',
+                   description: `EPUB parsed with ${sectionErrors} error(s). Some content might be missing.`,
+                   variant: 'destructive',
+                   duration: 5000,
+                 });
+              } else {
+                 console.log("EPUB parsing successful.");
+              }
+             resolve(fullText);
+          }
         } catch (error: any) {
             console.error("Critical EPUB Processing Error:", error);
             let errorMessage = "Error parsing EPUB file.";
-
-            if (isLikelyDrmError(error)) {
-                 errorMessage += " This file might be DRM-protected, which is not supported.";
-                 console.error("Detected potential DRM protection.");
-            } else if (error.message?.includes('File is not a zip file') || error.name === 'SyntaxError') {
-                errorMessage += " The file appears corrupted or is not a valid EPUB (ZIP archive).";
-                console.error("EPUB file seems corrupted or invalid format.");
-            } else if (error.message?.includes('timed out')) {
-                 errorMessage += ` ${error.message}`;
-                 console.error("EPUB processing timed out.");
-            }
-            else if (error.message) {
-                 errorMessage += ` Details: ${error.message}`;
-            } else {
-                 errorMessage += " It might be corrupted, in an unsupported format, or have internal structure issues.";
-            }
-             if (book && typeof book.destroy === 'function') {
-                 try { book.destroy(); } catch (err) { console.warn("Error destroying book after critical error:", err); }
-             }
+            if (isLikelyDrmError(error)) errorMessage += " This file might be DRM-protected.";
+            else if (error.message?.includes('File is not a zip file')) errorMessage += " Invalid EPUB format.";
+            else if (error.message?.includes('timed out')) errorMessage += ` ${error.message}`;
+            else if (error.message) errorMessage += ` Details: ${error.message}`;
+            else errorMessage += " Unexpected error.";
             reject(new Error(errorMessage));
         } finally {
-             try {
-                if (book && typeof book.destroy === 'function') {
-                    console.log("Destroying epubjs book instance...");
-                    book.destroy();
-                    console.log("Book instance destroyed.");
-                } else {
-                    console.log("No book instance to destroy or destroy method not available.");
-                }
-             } catch (destroyError) {
-                console.warn("Error destroying epubjs book instance:", destroyError);
-             }
+            // Dismiss loading toast when done (success or error)
+            if (toastId && loadingToast.dismiss) {
+                loadingToast.dismiss();
+            }
+            if (book && typeof book.destroy === 'function') {
+                try { book.destroy(); } catch (destroyError) { console.warn("Error destroying book instance:", destroyError); }
+            }
         }
-      };
-      reader.onerror = (e) => {
-        console.error("FileReader error:", reader.error);
-        if (book && typeof book.destroy === 'function') {
-            try { book.destroy(); } catch (err) { console.warn("Error destroying book after FileReader error:", err); }
-        }
-        reject(new Error(`Error reading the file using FileReader: ${reader.error?.message || 'Unknown FileReader error'}`));
-      };
-      reader.onabort = (e) => {
-        console.warn("FileReader operation aborted.");
-        if (book && typeof book.destroy === 'function') {
-             try { book.destroy(); } catch (err) { console.warn("Error destroying book after FileReader abort:", err); }
-         }
-        reject(new Error("File reading was aborted."));
-      }
-
-      console.log(`Starting FileReader for ${file.name}...`);
-      reader.readAsArrayBuffer(file);
     });
-   }, [toast, extractTextRecursive]); // Removed 'dismiss' as it's called directly now
+   }, [toast, extractTextRecursive]);
 
 
   const handleFileUpload = useCallback(
     async (event: React.ChangeEvent<HTMLInputElement>) => {
       const file = event.target.files?.[0];
-      if (!file) {
-          console.log("No file selected.");
-          return;
-      }
+      if (!file) return;
 
-       console.log(`File selected: ${file.name}, Type: ${file.type}, Size: ${file.size} bytes`);
-
+      console.log(`File selected: ${file.name}`);
       setIsPlaying(false);
       if (timeoutRef.current) clearTimeout(timeoutRef.current);
       setCurrentIndex(0);
       setProgress(0);
       setFileName(file.name);
       setText('');
-      setTokens([]);
+      setWords([]);
       setActualWordCount(0);
-      setIsAdjustingChunk(false);
 
-      // Get dismiss function and ID *before* potential async operations
-      const loadingToast = toast({ title: 'Loading File...', description: `Processing ${file.name}` });
+      // Use the ref to store the toast instance
+      toastRef.current = toast({ title: 'Loading File...', description: `Processing ${file.name}` });
 
       try {
          let fileContent = '';
-         console.log(`Checking file type for ${file.name}...`);
          const lowerCaseName = file.name.toLowerCase();
 
          if (file.type === 'text/plain' || lowerCaseName.endsWith('.txt')) {
-           console.log("Detected text file.");
-           const reader = new FileReader();
+           console.log("Reading TXT file...");
            fileContent = await new Promise<string>((resolve, reject) => {
-             reader.onload = (e) => {
-                 if (e.target?.result) {
-                     console.log("TXT file read successfully.");
-                     resolve(e.target.result as string);
-                 } else {
-                     console.error("FileReader onload for TXT, but result is empty.");
-                     reject(new Error("Failed to read TXT file content."));
-                 }
-             };
-             reader.onerror = (e) => {
-                  console.error("FileReader error reading TXT:", reader.error);
-                 reject(new Error(`Error reading TXT file: ${reader.error?.message || 'Unknown error'}`));
-             };
-             console.log("Reading TXT file as text...");
+             const reader = new FileReader();
+             reader.onload = (e) => e.target?.result ? resolve(e.target.result as string) : reject(new Error("Failed to read TXT."));
+             reader.onerror = (e) => reject(new Error(`Error reading TXT: ${reader.error?.message || 'Unknown'}`));
              reader.readAsText(file);
            });
          } else if (lowerCaseName.endsWith('.epub') || file.type === 'application/epub+zip') {
-             console.log("Detected EPUB file. Calling parseEpub...");
+             console.log("Parsing EPUB file...");
              fileContent = await parseEpub(file);
-             console.log("parseEpub completed.");
          } else if (lowerCaseName.endsWith('.mobi')) {
-            console.warn("Unsupported file type: .mobi");
-            loadingToast.dismiss(); // Dismiss loading toast
-            toast({
-             title: 'Unsupported Format',
-             description: '.mobi files are not currently supported. Please try .txt or .epub.',
-             variant: 'destructive',
-           });
-           setFileName(null);
-           return;
+            throw new Error(".mobi files are not supported. Please use .txt or .epub.");
          } else {
-            console.warn(`Unsupported file type: ${file.type} / ${file.name}`);
-            loadingToast.dismiss(); // Dismiss loading toast
-           toast({
-             title: 'Unsupported File Type',
-             description: `"${file.name}" is not a supported .txt or .epub file.`,
-             variant: 'destructive',
-           });
-            setFileName(null);
-           return;
+            throw new Error(`Unsupported file type: "${file.name}". Please use .txt or .epub.`);
          }
 
          console.log(`File content length: ${fileContent.length}`);
          setText(fileContent);
-         // Tokenize by whitespace (including newlines)
-         const newTokens = fileContent.split(/[\s\n]+/).filter(token => token.length > 0);
-         console.log(`Extracted ${newTokens.length} tokens (split by whitespace).`);
-         setTokens(newTokens);
-
-         // Count actual words (alphanumeric sequences)
-         const wordCount = newTokens.filter(isActualWord).length;
+         const newWords = fileContent.split(/[\s\n]+/).filter(token => token.length > 0);
+         console.log(`Extracted ${newWords.length} words/tokens.`);
+         setWords(newWords);
+         const wordCount = newWords.filter(isActualWord).length;
          setActualWordCount(wordCount);
-         console.log(`Counted ${wordCount} actual words.`);
+         console.log(`Counted ${actualWordCount} actual words.`);
 
-         // Explicitly dismiss the loading toast *before* showing success/error
-          loadingToast.dismiss(); // Use the function obtained earlier
+         // Dismiss loading toast using the ref
+         if (toastRef.current && toastRef.current.dismiss) {
+            toastRef.current.dismiss();
+         }
 
-
-         if (newTokens.length === 0 && fileContent.length > 0) {
-             console.warn("File loaded, but no tokens extracted after splitting. Check content format.");
-            toast({
-             title: 'Parsing Issue',
-             description: 'File loaded, but no words/elements were extracted after splitting. Check content format or potential errors.',
-             variant: 'destructive',
-           });
-         } else if (newTokens.length === 0) {
-              console.warn("The loaded file appears to be empty or contains no readable text.");
-             toast({
-             title: 'Empty File',
-             description: 'The loaded file appears to be empty or contains no readable text.',
-              variant: 'destructive',
-           });
-         } else if (wordCount === 0 && newTokens.length > 0) {
-             console.warn("Tokens extracted, but no actual words found (only punctuation/symbols?).");
-             toast({
-                 title: 'No Words Found',
-                 description: 'The file seems to contain only punctuation or symbols, no readable words were found.',
-                 variant: 'destructive',
-             });
+         if (newWords.length === 0 && fileContent.length > 0) {
+             throw new Error("File loaded, but no words extracted. Check content format.");
+         } else if (newWords.length === 0) {
+             throw new Error("The file appears to be empty.");
+         } else if (wordCount === 0) {
+             throw new Error("The file contains no readable words (only punctuation/symbols?).");
          } else {
-             console.log("File loaded and tokens extracted successfully.");
-             toast({
-               title: 'File Loaded',
-               description: `${file.name} is ready for reading.`,
-             });
+             toast({ title: 'File Loaded', description: `${file.name} ready.` });
          }
       } catch (error: any) {
-         console.error('Error during file processing or parsing:', error);
-          // Dismiss loading toast first, then show error
-          loadingToast.dismiss(); // Use the function obtained earlier
-          toast({
-           title: 'Error Loading File',
-           description: error.message || 'An unexpected error occurred. Check console.',
-           variant: 'destructive',
-            duration: 7000,
-         });
-         setFileName(null);
-         setText('');
-         setTokens([]);
-         setActualWordCount(0);
+         console.error('Error loading file:', error);
+         // Dismiss loading toast if it exists
+         if (toastRef.current && toastRef.current.dismiss) {
+             toastRef.current.dismiss();
+         }
+         toast({ title: 'Error Loading File', description: error.message || 'Unknown error.', variant: 'destructive', duration: 7000 });
+         setFileName(null); setText(''); setWords([]); setActualWordCount(0);
       } finally {
-        console.log("File upload handling finished.");
-        if (event.target) {
-            event.target.value = '';
-        }
+        if (event.target) event.target.value = ''; // Clear file input
+        toastRef.current = null; // Clear the toast ref
       }
     },
-    [parseEpub, toast, dismiss] // Add dismiss here
+    [parseEpub, toast]
   );
 
 
    // --- Punctuation and Delay Logic ---
    const currentChunkPunctuationInfo = useMemo(() => {
-       if (currentIndex >= tokens.length) return { delayMultiplier: 1.0 };
-
-       // Check the last token of the *previous* chunk (which is currentIndex - 1)
+       if (currentIndex >= words.length) return { delayMultiplier: 1.0 };
        const previousTokenIndex = currentIndex - 1;
-       if (previousTokenIndex < 0) return { delayMultiplier: 1.0 }; // No previous token
+       if (previousTokenIndex < 0) return { delayMultiplier: 1.0 };
 
-       const previousToken = tokens[previousTokenIndex];
+       const previousToken = words[previousTokenIndex];
        const punctuationType = getPunctuationType(previousToken);
 
-        // Apply delay multiplier based on the punctuation at the end of the PREVIOUS chunk
+       // Apply delay multiplier based on punctuation at the end of the PREVIOUS chunk
        if (punctuationType === 'sentence' || punctuationType === 'clause') {
            console.log(`Applying x3 delay multiplier for ${punctuationType} end.`);
-           return { delayMultiplier: 3.0 }; // Triple delay after ., !, ?, ,, ;, :
+           return { delayMultiplier: 3.0 }; // Triple delay for sentence or clause end
        }
 
-       return { delayMultiplier: 1.0 }; // Default multiplier
-   }, [currentIndex, tokens]);
+       return { delayMultiplier: 1.0 };
+   }, [currentIndex, words]);
 
 
-  // Function to advance to the next chunk based on the *new* findChunkInfo logic
+  // Function to advance to the next chunk
   const advanceChunk = useCallback(() => {
-    // Use findChunkInfo to get the end index of the next logical chunk
-    const { endIndex } = findChunkInfo(currentIndex, chunkWordTarget, tokens);
+    // Use findChunkInfo with the current index and target word count
+    const { endIndex } = findChunkInfo(currentIndex, chunkWordTarget, words);
 
-    if (endIndex >= tokens.length) {
-        setCurrentIndex(tokens.length);
+    if (endIndex >= words.length) {
+        setCurrentIndex(words.length);
         setIsPlaying(false);
         toast({ title: "End of Text", description: "Finished reading." });
         if (timeoutRef.current) clearTimeout(timeoutRef.current);
     } else {
-        setCurrentIndex(endIndex); // Move to the start of the next chunk
+        setCurrentIndex(endIndex);
     }
-  }, [currentIndex, tokens, chunkWordTarget, toast]);
+  }, [currentIndex, words, chunkWordTarget, toast]);
 
 
-   // Effect to handle the reading timer using setTimeout for dynamic delays
+   // Effect to handle the reading timer
    useEffect(() => {
-     if (timeoutRef.current) {
-       clearTimeout(timeoutRef.current);
-       timeoutRef.current = null;
-     }
+     if (timeoutRef.current) clearTimeout(timeoutRef.current);
 
-     if (isPlaying && tokens.length > 0 && currentIndex < tokens.length) {
-        // Get the delay multiplier based on the punctuation of the *previous* chunk
+     if (isPlaying && words.length > 0 && currentIndex < words.length) {
         const { delayMultiplier } = currentChunkPunctuationInfo;
-
-        // Calculate the actual number of words in the *upcoming* chunk
-        const { actualWordsInChunk } = findChunkInfo(currentIndex, chunkWordTarget, tokens);
-
-        // Calculate base interval per word
+        // Calculate actual words in the *upcoming* chunk
+        const { actualWordsInChunk } = findChunkInfo(currentIndex, chunkWordTarget, words);
         const wordInterval = calculateWordInterval();
+        const effectiveWords = Math.max(1, actualWordsInChunk);
+        const currentDelay = wordInterval * effectiveWords * delayMultiplier;
 
-        // Calculate delay: interval per word * actual words in this chunk * punctuation multiplier
-        const effectiveWords = Math.max(1, actualWordsInChunk); // Ensure at least 1 word contributes to delay
-        let currentDelay = wordInterval * effectiveWords * delayMultiplier;
-
-       // Schedule the next advanceChunk call
-       console.log(`Scheduling next chunk. Target Words: ${chunkWordTarget}, Actual Words: ${actualWordsInChunk}, Word Interval: ${wordInterval.toFixed(0)}ms, Punctuation Multiplier: ${delayMultiplier.toFixed(2)}, Final Delay: ${currentDelay.toFixed(0)}ms`);
-       timeoutRef.current = setTimeout(advanceChunk, Math.max(50, currentDelay)); // Ensure minimum delay
+        console.log(`Scheduling next chunk. Words: ${actualWordsInChunk}, Interval: ${wordInterval.toFixed(0)}ms, Multiplier: ${delayMultiplier.toFixed(2)}, Delay: ${currentDelay.toFixed(0)}ms`);
+        timeoutRef.current = setTimeout(advanceChunk, Math.max(50, currentDelay));
      }
 
-     // Cleanup function
-     return () => {
-       if (timeoutRef.current) {
-         clearTimeout(timeoutRef.current);
-         timeoutRef.current = null;
-       }
-     };
-   }, [
-       isPlaying,
-       tokens,
-       currentIndex,
-       advanceChunk,
-       calculateWordInterval,
-       chunkWordTarget, // Depend on the target word count
-       currentChunkPunctuationInfo, // Depend on punctuation info
-     ]);
+     return () => { if (timeoutRef.current) clearTimeout(timeoutRef.current); };
+   }, [ isPlaying, words, currentIndex, advanceChunk, calculateWordInterval, chunkWordTarget, currentChunkPunctuationInfo ]);
 
 
+   // Update progress based on actual words processed
    useEffect(() => {
     if (actualWordCount > 0) {
         let wordsProcessed = 0;
-        for (let i = 0; i < Math.min(currentIndex, tokens.length); i++) {
-            if (isActualWord(tokens[i])) {
+        for (let i = 0; i < Math.min(currentIndex, words.length); i++) {
+            if (isActualWord(words[i])) {
                 wordsProcessed++;
             }
         }
@@ -756,33 +575,20 @@ export default function Home() {
     } else {
         setProgress(0);
     }
-   }, [currentIndex, tokens, actualWordCount]);
+   }, [currentIndex, words, actualWordCount]);
 
 
   const togglePlay = () => {
-    if (tokens.length === 0) {
-      toast({
-        title: 'No Text Loaded',
-        description: 'Please upload a file.',
-        variant: 'destructive',
-      });
+    if (words.length === 0) {
+      toast({ title: 'No Text', description: 'Please upload a file.', variant: 'destructive' });
       return;
     }
-     if (currentIndex >= tokens.length) {
-        setCurrentIndex(0);
-        setProgress(0);
-        setIsPlaying(true);
-        toast({title: "Restarting Reading"});
+     if (currentIndex >= words.length) {
+        setCurrentIndex(0); setProgress(0); setIsPlaying(true); toast({title: "Restarting"});
     } else {
          setIsPlaying((prev) => {
              const newState = !prev;
-             if (!newState && timeoutRef.current) {
-                 clearTimeout(timeoutRef.current);
-                 timeoutRef.current = null;
-                 console.log("Playback paused, timer cleared.");
-             } else if (newState) {
-                 console.log("Playback started/resumed.");
-             }
+             if (!newState && timeoutRef.current) clearTimeout(timeoutRef.current);
              return newState;
          });
     }
@@ -790,20 +596,20 @@ export default function Home() {
 
   // --- Navigation ---
    const goToNextChunk = useCallback(() => {
-     if (isPlaying) setIsPlaying(false); // Pause on manual navigation
+     if (isPlaying) setIsPlaying(false);
      advanceChunk();
    }, [advanceChunk, isPlaying]);
 
    const goToPreviousChunk = useCallback(() => {
-     if (isPlaying) setIsPlaying(false); // Pause on manual navigation
-     const previousStartIndex = findPreviousChunkStart(currentIndex, chunkWordTarget, tokens);
+     if (isPlaying) setIsPlaying(false);
+     const previousStartIndex = findPreviousChunkStart(currentIndex, chunkWordTarget, words);
      setCurrentIndex(previousStartIndex);
-   }, [currentIndex, chunkWordTarget, tokens, isPlaying]);
+   }, [currentIndex, chunkWordTarget, words, isPlaying]);
 
 
-  // Find the chunk info for the *current* display using the new logic
-  const { endIndex: currentChunkEndIndex } = findChunkInfo(currentIndex, chunkWordTarget, tokens);
-  const currentTokensForDisplay = tokens.slice(currentIndex, currentChunkEndIndex);
+  // Find the chunk info for the *current* display
+  const { endIndex: currentChunkEndIndex } = findChunkInfo(currentIndex, chunkWordTarget, words);
+  const currentTokensForDisplay = words.slice(currentIndex, currentChunkEndIndex);
 
 
    const calculatePivot = (token: string): number => {
@@ -812,7 +618,6 @@ export default function Home() {
      return Math.max(0, Math.min(Math.floor(len / 3), len - 1));
    };
 
-  // Pivot based on the first token of the current display chunk
   const firstTokenPivotIndex = calculatePivot(currentTokensForDisplay[0] || '');
 
 
@@ -820,11 +625,10 @@ export default function Home() {
     <div className="flex flex-col h-screen bg-background text-foreground">
       <Progress value={progress} className="w-full h-1 fixed top-0 left-0 z-20" />
       <main className="flex-grow flex items-center justify-center overflow-hidden pt-5 pb-20 px-4">
-        {tokens.length > 0 ? (
+        {words.length > 0 ? (
           <ReadingDisplay
             tokens={currentTokensForDisplay}
             pivotIndex={firstTokenPivotIndex}
-            isAdjusted={isAdjustingChunk} // Reuse this flag or remove if not needed
            />
         ) : (
           <div className="text-center text-muted-foreground">
@@ -836,16 +640,16 @@ export default function Home() {
       <ReaderControls
         wpm={wpm}
         setWpm={setWpm}
-        chunkWordTarget={chunkWordTarget} // Pass target word count
-        setChunkWordTarget={setChunkWordTarget} // Setter for target
+        chunkWordTarget={chunkWordTarget}
+        setChunkWordTarget={setChunkWordTarget}
         isPlaying={isPlaying}
         togglePlay={togglePlay}
         onFileUpload={handleFileUpload}
         fileName={fileName}
-        goToNextChunk={goToNextChunk} // Pass navigation function
-        goToPreviousChunk={goToPreviousChunk} // Pass navigation function
-        canGoPrevious={currentIndex > 0} // Determine if previous is possible
-        canGoNext={currentIndex < tokens.length} // Determine if next is possible
+        goToNextChunk={goToNextChunk}
+        goToPreviousChunk={goToPreviousChunk}
+        canGoPrevious={currentIndex > 0}
+        canGoNext={currentIndex < words.length}
       />
     </div>
   );
