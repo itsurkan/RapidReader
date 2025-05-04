@@ -36,7 +36,7 @@ export default function RootLayout({
       </head>
       <body
         className={`${inter.className} antialiased`} // Apply font and basic styling
-        // suppressHydrationWarning={true} // Removed: Better to fix the root cause
+        suppressHydrationWarning={true} // Add this line to suppress hydration warnings for body attributes
       >
         {children}
         <Toaster /> {/* Add Toaster component */}
