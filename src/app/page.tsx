@@ -213,7 +213,7 @@ const findChunkInfo = (
      }
 
 
-    return { endIndex: finalEndIndex, actualWordsInChunk: finalActualWordsCount, isAdjusted }; // Return adjustment flag
+    return { endIndex: finalEndIndex, actualWordsInChunk: finalActualWordsCount, isAdjusted: isAdjusted }; // Return adjustment flag
 };
 
 
@@ -405,11 +405,21 @@ export default function Home() {
             for (const item of book.spine.items) {
                 try {
                     console.log(`Loading section (href: ${item.href})...`);
-                    const section: Section = await book.load(item.href); // Load section by href
-                    const contents: Document | null = await section?.render(book.renderer); // Render the section
+                    const section = book.section(item.href); // Get section by href using book.section
+                    if (!section) {
+                        console.warn(`Section not found in book instance (href: ${item.href})`);
+                        continue;
+                    }
 
-                    if (contents && contents.body) {
-                        const sectionText = extractTextRecursive(contents.body);
+                    await section.load(book.load.bind(book)); // Load the section content using section.load
+                    if (!section.document) {
+                        console.warn(`Section loaded but document is null (href: ${item.href})`);
+                        continue;
+                    }
+
+                    // Ensure section.document.body exists before parsing
+                    if (section.document.body) {
+                        const sectionText = extractTextRecursive(section.document.body);
                         if (sectionText) {
                             const trimmedSectionText = sectionText.trim();
                             if (fullText.length > 0 && !fullText.endsWith('\n\n')) {
@@ -422,14 +432,16 @@ export default function Home() {
                             console.warn(`Section parsing yielded no text (href: ${item.href}).`);
                         }
                     } else {
-                        console.warn(`Skipping section due to unexpected structure or load failure (href: ${item.href}).`);
+                        console.warn(`Skipping section due to missing body element (href: ${item.href}).`);
                     }
+
                 } catch (sectionError: any) {
                     console.error(`Error processing section (href: ${item.href}):`, sectionError.message || sectionError);
                     sectionErrors++;
                     fullText += `\n\n[Section Skipped Due To Error: ${sectionError.message || 'Unknown error'}]\n\n`;
                 }
             }
+
 
           console.log(`Processed ${totalSections} sections with ${sectionErrors} errors.`);
 
