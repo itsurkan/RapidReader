@@ -28,14 +28,17 @@ export default function Home() {
   const [fileName, setFileName] = useState<string | null>(null);
   const [progress, setProgress] = useState<number>(0);
 
-  const intervalRef = useRef<NodeJS.Timeout | null>(null);
+  // Ref for managing setTimeout
+  const timeoutRef = useRef<NodeJS.Timeout | null>(null);
   const { toast } = useToast();
 
-  const calculateInterval = useCallback(() => {
-    // Ensure wpm is positive to avoid division by zero or negative intervals
+  // Function to calculate base interval delay
+  const calculateBaseInterval = useCallback(() => {
     const effectiveWpm = Math.max(1, wpm);
+    // Calculate delay per word, then multiply by words per display
     return (60 / effectiveWpm) * 1000 * Math.max(1, wordsPerDisplay);
   }, [wpm, wordsPerDisplay]);
+
 
   const parseEpub = useCallback(async (file: File): Promise<string> => {
     // Dynamically import epubjs only when needed
@@ -93,7 +96,7 @@ export default function Home() {
                                 const trimmedText = node.textContent?.trim();
                                 if (trimmedText) {
                                     // Add space only if the last char wasn't already a space or newline
-                                    if (extractedText.length > 0 && !/[\s\n]$/.test(extractedText)) {
+                                    if (extractedText.length > 0 && !/[\s\n]$/.test(extractedText) && !extractedText.endsWith('\n\n')) {
                                          extractedText += ' ';
                                     }
                                     extractedText += trimmedText;
@@ -101,24 +104,33 @@ export default function Home() {
                             } else if (node.nodeType === Node.ELEMENT_NODE) {
                                 const element = node as HTMLElement;
                                 // Consider common block-level elements for paragraph breaks
-                                const isBlock = ['P', 'DIV', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'LI', 'BLOCKQUOTE', 'PRE', 'HR', 'TABLE', 'TR', 'BR'].includes(element.tagName);
-                                // const isInline = ['A', 'SPAN', 'I', 'B', 'EM', 'STRONG'].includes(element.tagName); // Not currently used, but kept for potential future logic
+                                const isBlock = ['P', 'DIV', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'LI', 'BLOCKQUOTE', 'PRE', 'HR', 'TABLE', 'TR', 'BR'].includes(element.tagName.toUpperCase());
 
-                                if (isBlock && extractedText.length > 0 && !extractedText.endsWith('\n\n')) {
-                                     extractedText += '\n\n'; // Add paragraph break before block elements if needed
+                                if (isBlock && extractedText.length > 0 && !extractedText.endsWith('\n\n') && !extractedText.endsWith(' ')) {
+                                    // Add paragraph break before block elements if needed, unless already spaced
+                                     extractedText += '\n\n';
+                                } else if (isBlock && extractedText.length > 0 && !extractedText.endsWith('\n\n') ) {
+                                     // Add single newline if already ends with a space (less aggressive break)
+                                     extractedText += '\n';
                                 }
+
 
                                 for (let i = 0; i < node.childNodes.length; i++) {
                                     extractedText += extractTextWithBreaks(node.childNodes[i]);
                                 }
 
                                  if (isBlock && !extractedText.endsWith('\n\n')) {
-                                     extractedText += '\n\n'; // Add paragraph break after block elements if needed
+                                     // Add paragraph break after block elements if needed
+                                     extractedText += '\n\n';
                                  }
                             }
                             return extractedText;
                         };
                          fullText += extractTextWithBreaks(body);
+                         // Add a space after processing a body to separate sections, unless it already ends with space/newline
+                         if (!/[\s\n]$/.test(fullText)) {
+                             fullText += ' ';
+                         }
                     } else {
                          console.warn(`Section ${item.idref || 'unknown'} loaded but body element not found.`);
                          // Fallback: try getting text content from the whole section document
@@ -164,9 +176,10 @@ export default function Home() {
           }
           console.log(`Finished processing ${book.spine.items.length} sections with ${sectionErrors} errors.`);
 
-           // Clean up excessive whitespace and line breaks
-           fullText = fullText.replace(/(\r\n|\r|\n){3,}/g, '\n\n'); // Consolidate multiple newlines to max 2
+           // Clean up excessive whitespace and line breaks more carefully
            fullText = fullText.replace(/[ \t]{2,}/g, ' '); // Consolidate multiple spaces/tabs to single space
+           fullText = fullText.replace(/(\r\n|\r|\n)[ \t]*(\r\n|\r|\n)/g, '\n\n'); // Consolidate multiple newlines (with optional space in between) to max 2
+           fullText = fullText.replace(/(\n\n){2,}/g, '\n\n'); // Ensure max 2 consecutive newlines
            fullText = fullText.trim(); // Trim leading/trailing whitespace
            console.log(`Extracted text length (after cleanup): ${fullText.length}`);
 
@@ -204,7 +217,12 @@ export default function Home() {
                  errorMessage += " This file might be DRM-protected, which is not supported.";
             } else if (error.message) {
                  // Append specific error message if available and potentially helpful
-                 errorMessage += ` Details: ${error.message}`;
+                 // Be careful not to leak sensitive info if applicable
+                 if (!error.message.includes("JSZip")) { // Avoid generic JSZip errors
+                    errorMessage += ` Details: ${error.message}`;
+                 } else {
+                    errorMessage += " Possible structure error or corruption.";
+                 }
             } else {
                  errorMessage += " It might be corrupted or in an unsupported format.";
             }
@@ -237,7 +255,7 @@ export default function Home() {
       console.log(`Starting FileReader for ${file.name}...`);
       reader.readAsArrayBuffer(file); // Use readAsArrayBuffer for epubjs
     });
-   }, [toast]); // Added toast dependency
+   }, [toast]);
 
 
   const handleFileUpload = useCallback(
@@ -251,13 +269,14 @@ export default function Home() {
        console.log(`File selected: ${file.name}, Type: ${file.type}, Size: ${file.size} bytes`);
 
       setIsPlaying(false); // Stop reading when a new file is uploaded
+      if (timeoutRef.current) clearTimeout(timeoutRef.current); // Clear any pending timeout
       setCurrentIndex(0); // Reset index
       setProgress(0); // Reset progress
       setFileName(file.name); // Set the file name
       setText(''); // Clear previous text immediately
       setWords([]); // Clear previous words immediately
 
-      const loadingToast = toast({ title: 'Loading File...', description: `Processing ${file.name}` });
+      const loadingToastId = toast({ title: 'Loading File...', description: `Processing ${file.name}` }).id;
 
       try {
          let fileContent = '';
@@ -288,8 +307,8 @@ export default function Home() {
              console.log("parseEpub completed.");
          } else if (file.name.toLowerCase().endsWith('.mobi')) {
             console.warn("Unsupported file type: .mobi");
-           loadingToast.dismiss(); // Dismiss loading toast
-           toast({
+            toast({
+             id: loadingToastId, // Use existing ID to update/dismiss
              title: 'Unsupported Format',
              description: '.mobi files are not currently supported. Please try .txt or .epub.',
              variant: 'destructive',
@@ -298,8 +317,8 @@ export default function Home() {
            return; // Exit early
          } else {
             console.warn(`Unsupported file type: ${file.type} / ${file.name}`);
-            loadingToast.dismiss(); // Dismiss loading toast
            toast({
+             id: loadingToastId, // Use existing ID to update/dismiss
              title: 'Unsupported File Type',
              description: `File type for "${file.name}" is not supported. Please upload a .txt or .epub file.`,
              variant: 'destructive',
@@ -310,11 +329,15 @@ export default function Home() {
 
          console.log(`File content length: ${fileContent.length}`);
          setText(fileContent);
-         const newWords = fileContent.split(/[\s\n]+/).filter(Boolean); // Split by whitespace/newlines and remove empty strings
+         // More robust word splitting, handling punctuation attached to words
+         const newWords = fileContent.match(/[\w'-]+(?:[.,!?;:]?)|[.,!?;:]/g) || [];
+         // const newWords = fileContent.split(/[\s\n]+/).filter(Boolean); // Original splitting
          console.log(`Extracted ${newWords.length} words.`);
          setWords(newWords);
 
-         loadingToast.dismiss(); // Dismiss loading toast
+         // Dismiss loading toast explicitly by ID if it's still shown
+         toast({id: loadingToastId, open: false });
+
 
          if (newWords.length === 0 && fileContent.length > 0) {
              console.warn("File loaded, but no words extracted. Content might be structured unusually.");
@@ -344,8 +367,9 @@ export default function Home() {
          console.error("Error Message:", error?.message);
          console.error("Error Stack:", error?.stack);
 
-         loadingToast.dismiss(); // Dismiss loading toast
-         toast({
+         // Update or dismiss the loading toast with the error message
+          toast({
+           id: loadingToastId, // Use existing ID
            title: 'Error Loading File',
            // Use the specific error message caught
            description: error.message || 'An unexpected error occurred while loading or parsing the file. Check the console for details.',
@@ -366,62 +390,84 @@ export default function Home() {
 
 
     },
-    [parseEpub, toast] // Keep toast here as it's used directly
+    [parseEpub, toast]
   );
 
 
+   // Function to advance to the next word/chunk
    const advanceWord = useCallback(() => {
-    setCurrentIndex((prevIndex) => {
-      const nextIndex = prevIndex + wordsPerDisplay;
-      if (nextIndex >= words.length) {
-        setIsPlaying(false); // Stop at the end
-         toast({ title: "End of Text Reached", description: "You've finished reading the loaded content." });
-         // Ensure index doesn't go beyond possible slice start
-          return Math.max(0, words.length - wordsPerDisplay); // Stay on the last valid chunk start
-      }
-      return nextIndex;
-    });
-  }, [words.length, wordsPerDisplay, toast]); // Added toast dependency
-
-
-  useEffect(() => {
-    if (isPlaying && words.length > 0) {
-      // Ensure we don't restart interval if already at the end or beyond
-       if (currentIndex < words.length) {
-        intervalRef.current = setInterval(advanceWord, calculateInterval());
-      } else {
-           // If currentIndex is somehow already at or past the end, ensure we stop.
-          setIsPlaying(false);
-          if(intervalRef.current) clearInterval(intervalRef.current);
-      }
+    if (currentIndex + wordsPerDisplay >= words.length) {
+        // Reached the end
+        setCurrentIndex(words.length); // Set index to the very end
+        setIsPlaying(false);
+        toast({ title: "End of Text Reached", description: "You've finished reading the loaded content." });
+        if (timeoutRef.current) clearTimeout(timeoutRef.current); // Clear timeout at the end
     } else {
-      if (intervalRef.current) {
-        clearInterval(intervalRef.current);
-        intervalRef.current = null;
-      }
+        // Move to the next chunk
+        setCurrentIndex(prevIndex => prevIndex + wordsPerDisplay);
+        // Note: The scheduling of the *next* advance happens in the useEffect
+    }
+  }, [currentIndex, words.length, wordsPerDisplay, toast]);
+
+
+  // Effect to handle the reading timer using setTimeout for dynamic delays
+  useEffect(() => {
+    // Clear any existing timeout when dependencies change or play state toggles
+    if (timeoutRef.current) {
+      clearTimeout(timeoutRef.current);
+      timeoutRef.current = null;
     }
 
-    // Cleanup interval on component unmount or when dependencies change
+    if (isPlaying && words.length > 0 && currentIndex < words.length) {
+      const baseInterval = calculateBaseInterval();
+      let currentDelay = baseInterval;
+
+      // Check the last word of the *previous* chunk for punctuation (if applicable)
+      // Or check the word *before* the current chunk starts
+      if (currentIndex > 0) {
+         const previousWord = words[currentIndex - 1];
+         if (previousWord && /[.,!?;:]$/.test(previousWord)) {
+           console.log(`Punctuation detected before chunk starting at index ${currentIndex}: "${previousWord}". Doubling delay.`);
+           currentDelay *= 2; // Double delay for common punctuation
+         }
+      }
+      // Alternative: Check the last word of the *current* chunk being displayed
+      // This would pause *after* showing the punctuation. Choose one approach.
+      /*
+      const lastWordInCurrentChunkIndex = Math.min(currentIndex + wordsPerDisplay - 1, words.length - 1);
+      const lastWordInCurrentChunk = words[lastWordInCurrentChunkIndex];
+      if (lastWordInCurrentChunk && /[.,!?;:]$/.test(lastWordInCurrentChunk)) {
+           console.log(`Punctuation detected at end of chunk (index ${lastWordInCurrentChunkIndex}): "${lastWordInCurrentChunk}". Doubling delay for next.`);
+          currentDelay *= 2; // Double delay for the *next* interval
+      }
+      */
+
+
+      // Schedule the next advanceWord call
+      timeoutRef.current = setTimeout(advanceWord, currentDelay);
+    }
+
+    // Cleanup function to clear timeout on unmount or when isPlaying becomes false
     return () => {
-      if (intervalRef.current) {
-        clearInterval(intervalRef.current);
+      if (timeoutRef.current) {
+        clearTimeout(timeoutRef.current);
       }
     };
-     // Add currentIndex and wordsPerDisplay to dependencies as they affect the condition and advanceWord logic.
-  }, [isPlaying, words.length, calculateInterval, advanceWord, currentIndex, wordsPerDisplay]);
+    // Dependencies: isPlaying, words.length, currentIndex, advanceWord, calculateBaseInterval
+    // `advanceWord` and `calculateBaseInterval` are memoized, so they only change when their own deps change.
+  }, [isPlaying, words.length, currentIndex, advanceWord, calculateBaseInterval]);
 
 
    useEffect(() => {
     if (words.length > 0) {
       // Calculate progress based on the number of words *started* (currentIndex)
-      // This feels more intuitive than tracking based on the *next* chunk.
       const currentPosition = Math.min(currentIndex, words.length);
       const currentProgress = (currentPosition / words.length) * 100;
        setProgress(Math.min(100, Math.max(0, currentProgress))); // Clamp progress between 0 and 100
     } else {
       setProgress(0);
     }
-   }, [currentIndex, words.length]); // Only depends on currentIndex and words.length
+   }, [currentIndex, words.length]);
 
 
   const togglePlay = () => {
@@ -433,47 +479,54 @@ export default function Home() {
       });
       return;
     }
-    // If at the end, reset to beginning before playing
-     if (currentIndex >= words.length - wordsPerDisplay && currentIndex > 0) { // Check if truly at the end or last chunk
+    // If at the very end (index is equal to length), reset to beginning
+     if (currentIndex >= words.length && words.length > 0) {
         setCurrentIndex(0);
         setProgress(0); // Reset progress visually as well
         setIsPlaying(true); // Start playing from beginning
         toast({title: "Restarting Reading", description: "Starting from the beginning."});
     } else {
+         // Otherwise, just toggle play/pause
          setIsPlaying((prev) => !prev);
+         // If pausing, clear the timeout immediately
+         if (isPlaying && timeoutRef.current) {
+             clearTimeout(timeoutRef.current);
+             timeoutRef.current = null;
+         }
     }
   };
 
   const currentWords = words.slice(currentIndex, currentIndex + wordsPerDisplay);
 
   // Calculate pivot character index (simple middle point for now)
-  // A more sophisticated approach (ORP - Optimal Recognition Point) could be implemented here.
   // Recalculate pivot based on the first word in the current chunk
    const calculatePivot = (word: string): number => {
     if (!word) return 0;
+     // Remove trailing punctuation for pivot calculation if needed, but display it
+     const cleanWord = word.replace(/[.,!?;:]$/, '');
     // Pivot point around 1/3rd from the start, min 0, max length-1
-    return Math.max(0, Math.min(Math.floor(word.length / 3), word.length - 1));
+    return Math.max(0, Math.min(Math.floor(cleanWord.length / 3), cleanWord.length - 1));
    };
   const firstWordPivotIndex = calculatePivot(currentWords[0] || '');
 
 
   return (
     <div className="flex flex-col h-screen bg-background text-foreground">
-       {/* Use fixed positioning for progress bar to ensure it's always visible */}
+      {/* Progress bar remains fixed */}
       <Progress value={progress} className="w-full h-1 fixed top-0 left-0 z-20" />
-       {/* Main content area with padding to avoid overlap with fixed progress and controls */}
-      <main className="flex-grow flex items-center justify-center overflow-hidden pt-5 pb-20 px-4"> {/* Adjusted padding */}
+      {/* Main content area with padding */}
+      <main className="flex-grow flex items-center justify-center overflow-hidden pt-5 pb-20 px-4">
         {words.length > 0 ? (
           <ReadingDisplay words={currentWords} pivotIndex={firstWordPivotIndex} />
         ) : (
           <div className="text-center text-muted-foreground">
             <p>Upload a .txt or .epub file to begin reading.</p>
-             {fileName && <p className="text-sm mt-2">Last attempt: {fileName}</p>}
-             <p className="text-xs mt-4">(Check browser console for detailed loading errors)</p>
+            {fileName && <p className="text-sm mt-2">Last attempt: {fileName}</p>}
+            <p className="text-xs mt-4">(Check browser console for detailed loading errors)</p>
           </div>
         )}
       </main>
-       {/* Controls remain fixed at the bottom */}
+      {/* Controls remain fixed at the bottom */}
       <ReaderControls
         wpm={wpm}
         setWpm={setWpm}
@@ -483,18 +536,7 @@ export default function Home() {
         togglePlay={togglePlay}
         onFileUpload={handleFileUpload}
         fileName={fileName}
-        // Pass functions to control reading position if needed in future
-        // e.g., onSeek={handleSeek} onRewind={handleRewind}
       />
     </div>
   );
 }
-
-// Potential future additions:
-// - handleSeek: Function to jump to a specific progress percentage
-// - handleRewind: Function to go back a certain number of words/chunks
-// - Settings persistence (localStorage)
-// - More sophisticated ORP calculation
-// - Theme switching (light/dark) based on system or user preference
-// - Keyboard shortcuts for play/pause, speed adjustment etc.
-// - Support for more file types (PDF, DOCX - might require server-side processing or heavier libraries)
