@@ -2,12 +2,12 @@
 'use client';
 
 import * as React from 'react';
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import type { Book } from 'epubjs'; // Import epubjs types only
 import { ReaderControls } from '@/components/reader-controls';
 import { ReadingDisplay } from '@/components/reading-display';
 import { Progress } from '@/components/ui/progress';
-import { useToast } from '@/hooks/use-toast';
+import { useToast } from '@/hooks/use-toast'; // Correct import
 import { cn } from '@/lib/utils';
 
 // Helper function to check if an error might be related to DRM
@@ -31,9 +31,9 @@ export default function Home() {
 
   // Ref for managing setTimeout
   const timeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const { toast } = useToast();
+  const { toast, dismiss } = useToast(); // Destructure dismiss function
 
-  // Function to calculate base interval delay
+  // Function to calculate base interval delay based on WPM and wordsPerDisplay
   const calculateBaseInterval = useCallback(() => {
     const effectiveWpm = Math.max(1, wpm);
     // Calculate delay per word, then multiply by words per display
@@ -42,7 +42,7 @@ export default function Home() {
 
 
    // Simplified recursive function to extract text, adding paragraph breaks
-   const extractTextRecursive = (node: Node): string => {
+   const extractTextRecursive = useCallback((node: Node): string => {
        let currentText = '';
        if (!node) return '';
 
@@ -86,7 +86,7 @@ export default function Home() {
            }
        }
        return currentText;
-   };
+   }, []); // No external dependencies needed for this pure function logic
 
 
   const parseEpub = useCallback(async (file: File): Promise<string> => {
@@ -314,7 +314,7 @@ export default function Home() {
       console.log(`Starting FileReader for ${file.name}...`);
       reader.readAsArrayBuffer(file); // Use readAsArrayBuffer for epubjs
     });
-   }, [toast, extractTextRecursive]); // Include extractTextRecursive dependency
+   }, [toast, extractTextRecursive]); // extractTextRecursive is memoized
 
 
   const handleFileUpload = useCallback(
@@ -336,7 +336,8 @@ export default function Home() {
       setWords([]);
       setIsAdjustingChunk(false); // Reset adaptive chunk state
 
-      const loadingToastId = toast({ title: 'Loading File...', description: `Processing ${file.name}` }).id;
+      const toastResult = toast({ title: 'Loading File...', description: `Processing ${file.name}` });
+      const loadingToastId = toastResult.id;
 
       try {
          let fileContent = '';
@@ -369,9 +370,8 @@ export default function Home() {
              console.log("parseEpub completed.");
          } else if (lowerCaseName.endsWith('.mobi')) {
             console.warn("Unsupported file type: .mobi");
-            toast.dismiss(loadingToastId); // Dismiss loading toast
+            if (loadingToastId && dismiss) dismiss(loadingToastId); // Dismiss loading toast
             toast({
-            //  id: loadingToastId, // Can't reuse ID easily after dismiss
              title: 'Unsupported Format',
              description: '.mobi files are not currently supported. Please try .txt or .epub.',
              variant: 'destructive',
@@ -380,9 +380,8 @@ export default function Home() {
            return;
          } else {
             console.warn(`Unsupported file type: ${file.type} / ${file.name}`);
-            toast.dismiss(loadingToastId); // Dismiss loading toast
+            if (loadingToastId && dismiss) dismiss(loadingToastId); // Dismiss loading toast
            toast({
-            //  id: loadingToastId,
              title: 'Unsupported File Type',
              description: `"${file.name}" is not a supported .txt or .epub file.`,
              variant: 'destructive',
@@ -401,7 +400,7 @@ export default function Home() {
          setWords(newWords);
 
          // Explicitly dismiss the loading toast *before* showing success/error
-         toast.dismiss(loadingToastId);
+         if (loadingToastId && dismiss) dismiss(loadingToastId);
 
 
          if (newWords.length === 0 && fileContent.length > 0) {
@@ -428,9 +427,8 @@ export default function Home() {
       } catch (error: any) {
          console.error('Error during file processing or parsing:', error);
           // Dismiss loading toast first, then show error
-          toast.dismiss(loadingToastId);
+          if (loadingToastId && dismiss) dismiss(loadingToastId);
           toast({
-            // id: loadingToastId, // Can't reuse ID easily after dismiss
            title: 'Error Loading File',
            description: error.message || 'An unexpected error occurred. Check console.',
            variant: 'destructive',
@@ -446,7 +444,7 @@ export default function Home() {
         }
       }
     },
-    [parseEpub, toast, extractTextRecursive] // Added extractTextRecursive dependency
+    [parseEpub, toast, dismiss] // Removed extractTextRecursive as it's memoized and stable
   );
 
 
@@ -458,49 +456,69 @@ export default function Home() {
         return i; // Return index of the word *with* punctuation
       }
     }
-    return words.length - 1; // Return index of the last word if no punctuation found
+    return -1; // Return -1 if no punctuation found before the end
   }, [words]);
 
 
-   // Adaptive chunk size logic
-   const calculateCurrentChunkSize = useCallback((): number => {
-     if (!isPlaying) return wordsPerDisplay; // Use setting when paused
+   // Memoize the calculation of chunk size and delay multiplier
+   const currentChunkAndDelay = useMemo((): { chunkSize: number; delayMultiplier: number; isAdjusted: boolean } => {
+     let chunkSize = Math.max(1, wordsPerDisplay); // Start with user setting
+     let delayMultiplier = 1.0; // Base multiplier
+     let localIsAdjustingChunk = false; // Use local variable to avoid direct state update
 
-     // Start searching for punctuation from the *next* word index
-     const nextWordIndex = currentIndex + 1;
-     const nextPunctuationIndex = findNextPunctuation(nextWordIndex);
-
-     // If no punctuation found ahead, or it's very far, return standard size
-     if (nextPunctuationIndex === -1 || nextPunctuationIndex >= words.length -1) {
-         setIsAdjustingChunk(false);
-         return wordsPerDisplay;
+     // Check the *last word of the previous chunk* for punctuation pause
+     if (currentIndex > 0) {
+       const lastWordOfPreviousChunkIndex = currentIndex - 1;
+       if (lastWordOfPreviousChunkIndex >= 0 && lastWordOfPreviousChunkIndex < words.length) {
+          const previousWord = words[lastWordOfPreviousChunkIndex];
+          if (previousWord && /[.?!]$/.test(previousWord)) {
+              // console.log(`Sentence end detected before index ${currentIndex}: "${previousWord}". Doubling delay.`);
+              delayMultiplier = 2.0; // Double delay for sentence terminators
+          }
+          else if (previousWord && /[,;:]$/.test(previousWord)) {
+              // console.log(`Clause punctuation detected before index ${currentIndex}: "${previousWord}". Adding 50% delay.`);
+              delayMultiplier = 1.5; // 50% longer delay for commas, semicolons, colons
+          }
+       }
      }
 
-     const wordsUntilPunctuation = nextPunctuationIndex - currentIndex; // Number of words *between* current and punctuation
+     // --- Adaptive Chunk Size Logic ---
+     const nextPunctuationIndex = findNextPunctuation(currentIndex);
 
-     // If the next punctuation is far enough away (e.g., more than double the display size)
-     // Increase the chunk size to show more words, up to the punctuation.
-     // Let's keep it simpler: if distance > 2 * wordsPerDisplay, increase size
-     if (wordsUntilPunctuation >= wordsPerDisplay * 2) {
-         setIsAdjustingChunk(true);
-         // Option 1: Show words up to (but not including) the punctuation
-         // return wordsUntilPunctuation;
-         // Option 2: Show a slightly increased number, e.g., 1.5x or 2x, capped
-          return Math.min(10, Math.max(wordsPerDisplay, Math.floor(wordsPerDisplay * 1.5)));
-         // Option 3: Show exactly double the wordsPerDisplay if possible
-         // return Math.min(wordsUntilPunctuation, wordsPerDisplay * 2);
+     if (nextPunctuationIndex !== -1) {
+         const wordsUntilPunctuation = nextPunctuationIndex - currentIndex + 1;
+         // Condition: If words until punctuation is at least double the user setting
+         if (wordsUntilPunctuation >= wordsPerDisplay * 2) {
+             // console.log(`Punctuation far (${wordsUntilPunctuation} words). Increasing chunk size.`);
+             localIsAdjustingChunk = true;
+             chunkSize = Math.min(10, wordsUntilPunctuation, Math.max(wordsPerDisplay, Math.floor(wordsPerDisplay * 1.5)));
+             // Reset multiplier if chunk size is increased? Let's test keeping the multiplier based on previous word.
+             // delayMultiplier = 1.0;
+         } else {
+             // console.log(`Punctuation near (${wordsUntilPunctuation} words). Using standard chunk size.`);
+             chunkSize = wordsPerDisplay;
+         }
      } else {
-         // If punctuation is close, stick to the user setting
-         setIsAdjustingChunk(false);
-         return wordsPerDisplay;
+         // console.log("No punctuation ahead. Using standard chunk size.");
+         chunkSize = wordsPerDisplay;
      }
-   }, [wordsPerDisplay, currentIndex, findNextPunctuation, isPlaying, words.length]); // Added words.length
+
+     return { chunkSize: Math.max(1, chunkSize), delayMultiplier, isAdjusted: localIsAdjustingChunk };
+
+   }, [wordsPerDisplay, currentIndex, findNextPunctuation, words]); // Recalculate when these change
+
+
+   // Effect to update the isAdjustingChunk state based on the memoized calculation
+   useEffect(() => {
+     setIsAdjustingChunk(currentChunkAndDelay.isAdjusted);
+   }, [currentChunkAndDelay.isAdjusted]);
 
 
   // Function to advance to the next word/chunk
   const advanceWord = useCallback(() => {
-    const currentChunkSize = calculateCurrentChunkSize();
-    const nextIndex = currentIndex + currentChunkSize;
+    // Get chunk size from the memoized calculation
+    const { chunkSize } = currentChunkAndDelay;
+    const nextIndex = currentIndex + chunkSize;
 
     if (nextIndex >= words.length) {
         setCurrentIndex(words.length); // Go to the very end
@@ -510,7 +528,7 @@ export default function Home() {
     } else {
         setCurrentIndex(nextIndex); // Move to the start of the next chunk
     }
-  }, [currentIndex, words.length, calculateCurrentChunkSize, toast]);
+  }, [currentIndex, words.length, currentChunkAndDelay, toast]); // Depend on memoized value
 
 
    // Effect to handle the reading timer using setTimeout for dynamic delays
@@ -521,36 +539,18 @@ export default function Home() {
      }
 
      if (isPlaying && words.length > 0 && currentIndex < words.length) {
-       const currentChunkSize = calculateCurrentChunkSize(); // Get potentially adaptive size
-       const baseInterval = calculateBaseInterval(); // Still based on user WPM and base wordsPerDisplay
+        // Get chunk size and delay multiplier from the memoized calculation
+        const { chunkSize, delayMultiplier } = currentChunkAndDelay;
 
-       // Adjust interval based on the *actual* chunk size being displayed
-       // If currentChunkSize is larger, interval should be proportionally larger
-       const sizeMultiplier = currentChunkSize / Math.max(1, wordsPerDisplay);
-       let currentDelay = baseInterval * sizeMultiplier;
+        // Calculate base interval using user WPM and *base* wordsPerDisplay
+        const baseInterval = calculateBaseInterval();
 
-        // Check the *last word of the previous chunk* for punctuation pause
-        // (Apply pause *before* showing the next chunk)
-        if (currentIndex > 0) {
-           const lastWordOfPreviousChunkIndex = currentIndex - 1;
-           // Ensure the index is valid
-           if (lastWordOfPreviousChunkIndex >= 0 && lastWordOfPreviousChunkIndex < words.length) {
-              const previousWord = words[lastWordOfPreviousChunkIndex];
-             // Check if the previous word itself is punctuation or ends with it.
-             // More specific check for sentence terminators
-             if (previousWord && /[.?!]$/.test(previousWord)) {
-                 console.log(`Sentence end detected before index ${currentIndex}: "${previousWord}". Doubling delay.`);
-                 currentDelay *= 2.0; // Double delay for sentence terminators
-             }
-             // Check for clause separators
-             else if (previousWord && /[,;:]$/.test(previousWord)) {
-                 console.log(`Clause punctuation detected before index ${currentIndex}: "${previousWord}". Adding 50% delay.`);
-                 currentDelay *= 1.5; // 50% longer delay for commas, semicolons, colons
-             }
-           }
-        }
+        // Adjust interval based on the *actual* chunk size being displayed *and* the punctuation multiplier
+        const sizeMultiplier = chunkSize / Math.max(1, wordsPerDisplay);
+        let currentDelay = baseInterval * sizeMultiplier * delayMultiplier;
 
        // Schedule the next advanceWord call
+       console.log(`Scheduling next word. Chunk Size: ${chunkSize}, Base Interval: ${baseInterval.toFixed(0)}ms, Size Multiplier: ${sizeMultiplier.toFixed(2)}, Punctuation Multiplier: ${delayMultiplier.toFixed(2)}, Final Delay: ${currentDelay.toFixed(0)}ms`);
        timeoutRef.current = setTimeout(advanceWord, Math.max(50, currentDelay)); // Ensure minimum delay
      }
 
@@ -565,9 +565,9 @@ export default function Home() {
        isPlaying,
        words, // Depends on words array content
        currentIndex,
-       advanceWord,
-       calculateBaseInterval,
-       calculateCurrentChunkSize,
+       advanceWord, // This is memoized and stable
+       calculateBaseInterval, // This is memoized and stable based on wpm/wordsPerDisplay
+       currentChunkAndDelay, // Depend on memoized value
        wordsPerDisplay // Base interval depends on this
      ]);
 
@@ -600,20 +600,20 @@ export default function Home() {
     } else {
          setIsPlaying((prev) => {
              const newState = !prev;
-             // If changing to playing state, immediately trigger the effect loop
-             // The useEffect hook will handle the timing
              // If changing to paused state, clear any pending timeout
              if (!newState && timeoutRef.current) {
                  clearTimeout(timeoutRef.current);
                  timeoutRef.current = null;
              }
+             // The useEffect will handle starting/resuming the timer if newState is true
              return newState;
          });
     }
   };
 
-  const currentChunkSize = calculateCurrentChunkSize(); // Get potentially adaptive size for slicing
-  const currentWords = words.slice(currentIndex, currentIndex + currentChunkSize);
+  // Get the current chunk size from the memoized calculation
+  const { chunkSize: currentChunkSizeForDisplay } = currentChunkAndDelay;
+  const currentWords = words.slice(currentIndex, currentIndex + currentChunkSizeForDisplay);
 
    const calculatePivot = (word: string): number => {
     if (!word) return 0;
@@ -667,3 +667,4 @@ export default function Home() {
 // - Theme switching (light/dark)
 // - Font customization
 // - Support for more file types (PDF, DOCX - might require server-side processing or heavier libraries)
+
