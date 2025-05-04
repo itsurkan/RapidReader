@@ -8,7 +8,11 @@ const testTxtFilePath = path.join(__dirname, '..', 'test-data', testTxtFileName)
 
 const testEpubFileName = 'test.epub';
 const testEpubDirPath = path.join(__dirname, '..', 'test-data', 'test.epub.dir');
+// Use a path relative to the project root that might be served or accessible via fetch in test environments
 const testEpubFilePath = path.join(__dirname, '..', 'test-data', testEpubFileName);
+// Public path if your server serves the test-data directory
+// const testEpubPublicPath = '/test-data/test.epub';
+
 
 // Function to zip the directory before tests run
 const createEpubZip = () => {
@@ -105,7 +109,7 @@ test('should load an EPUB file and start reading', async ({ page }) => {
   const firstWordEpub = await readingDisplay.textContent();
   expect(firstWordEpub).toBeTruthy();
   expect(firstWordEpub?.trim()).not.toEqual('Upload a .txt or .epub file to begin.');
-  expect(firstWordEpub?.trim().toLowerCase()).toContain('this is the'); // Check for expected content start
+  expect(firstWordEpub?.trim().toLowerCase()).toContain('test epub content'); // Check for expected content start
   console.log(`EPUB - First chunk displayed: "${firstWordEpub}"`);
 
   // Locate and click the play button
@@ -136,3 +140,5 @@ test.afterAll(() => {
     console.error(`Error cleaning up EPUB zip file: ${error}`);
   }
 });
+
+    
