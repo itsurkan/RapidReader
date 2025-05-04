@@ -1,22 +1,22 @@
 
 import * as React from 'react';
-import { Play, Pause, Upload, ChevronLeft, ChevronRight, Rewind, Settings, Palette, Image as ImageIcon } from 'lucide-react'; // Added Settings, Palette, ImageIcon
+import { Play, Pause, Upload, ChevronLeft, ChevronRight, Rewind, Settings, Palette, Image as ImageIcon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'; // Re-added Popover imports
-import { Label } from '@/components/ui/label'; // Re-added Label
-import { Slider } from '@/components/ui/slider'; // Re-added Slider
-import { Input } from '@/components/ui/input'; // Re-added Input
-import { Separator } from '@/components/ui/separator'; // Re-added Separator
-import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'; // Re-added RadioGroup
-import { useBackground } from '@/hooks/useBackground'; // Re-added useBackground
-import { useToast } from '@/hooks/use-toast'; // Re-added useToast
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { Label } from '@/components/ui/label';
+import { Slider } from '@/components/ui/slider';
+import { Input } from '@/components/ui/input';
+import { Separator } from '@/components/ui/separator';
+import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
+import { useBackground } from '@/hooks/useBackground';
+import { useToast } from '@/hooks/use-toast';
 import { cn } from '@/lib/utils'; // Import cn function
 
 interface ReaderControlsProps {
-  wpm: number; // Re-added
-  setWpm: (wpm: number) => void; // Re-added
-  chunkWordTarget: number; // Re-added
-  setChunkWordTarget: (count: number) => void; // Re-added
+  wpm: number;
+  setWpm: (wpm: number) => void;
+  chunkWordTarget: number;
+  setChunkWordTarget: (count: number) => void;
   isPlaying: boolean;
   togglePlay: () => void;
   onFileUpload: (event: React.ChangeEvent<HTMLInputElement>) => void;
@@ -29,10 +29,10 @@ interface ReaderControlsProps {
 }
 
 export function ReaderControls({
-  wpm, // Re-added
-  setWpm, // Re-added
-  chunkWordTarget, // Re-added
-  setChunkWordTarget, // Re-added
+  wpm,
+  setWpm,
+  chunkWordTarget,
+  setChunkWordTarget,
   isPlaying,
   togglePlay,
   onFileUpload,
@@ -44,10 +44,9 @@ export function ReaderControls({
   canGoPrevious,
 }: ReaderControlsProps) {
   const fileInputRef = React.useRef<HTMLInputElement>(null);
-  const bgImageInputRef = React.useRef<HTMLInputElement>(null); // Re-added
-  const [settingsOpen, setSettingsOpen] = React.useState(false); // State for popover
-  const { toast } = useToast(); // Re-added
-  // Re-added background hook usage
+  const bgImageInputRef = React.useRef<HTMLInputElement>(null);
+  const [settingsOpen, setSettingsOpen] = React.useState(false);
+  const { toast } = useToast();
   const {
     backgroundType,
     backgroundValue,
@@ -62,7 +61,6 @@ export function ReaderControls({
     fileInputRef.current?.click();
   };
 
-  // Re-added background handlers
   const handleBgImageUploadClick = () => {
     bgImageInputRef.current?.click();
   };
@@ -97,7 +95,6 @@ export function ReaderControls({
     }
   };
 
-  // Re-added radioValue calculation
   const radioValue = isInitialized
     ? backgroundType === 'color'
       ? 'theme-color'
@@ -107,7 +104,8 @@ export function ReaderControls({
     : 'theme-color'; // Default before initialization
 
 
-  return (
+  // Ensure there are no stray characters or syntax errors before the return statement
+  return ( // This corresponds to line 111 in the error message
     <div className="fixed bottom-0 left-0 right-0 bg-card p-4 shadow-md border-t flex items-center justify-between z-10"> {/* Lowered z-index */}
       {/* Left Section: Upload and File Name */}
       <div className="flex items-center gap-4 flex-1 min-w-0">
@@ -129,7 +127,6 @@ export function ReaderControls({
       </div>
 
       {/* Center Section: Play/Pause and Navigation */}
-       {/* Adjusted flex properties: flex-grow to allow center section to expand */}
       <div className="flex items-center justify-center gap-1 flex-grow">
          <Button
           variant="ghost"
@@ -165,14 +162,13 @@ export function ReaderControls({
 
       {/* Right Section: Settings Popover */}
       <div className="flex items-center justify-end flex-1">
-         {/* Re-added Settings Popover with controlled state */}
          <Popover open={settingsOpen} onOpenChange={setSettingsOpen}>
             <PopoverTrigger asChild>
               <Button variant="outline" size="icon" aria-label="Settings">
                 <Settings />
               </Button>
             </PopoverTrigger>
-            <PopoverContent className="w-80 max-h-[80vh] overflow-y-auto"> {/* Added scroll */}
+            <PopoverContent className="w-80 max-h-[80vh] overflow-y-auto">
               <div className="grid gap-4">
                 <div className="space-y-2">
                   <h4 className="font-medium leading-none">Settings</h4>
@@ -223,18 +219,16 @@ export function ReaderControls({
                       <RadioGroup
                          value={radioValue}
                          onValueChange={(value) => {
+                            console.log('value', value)
                            if (value === 'theme-color') {
                              setBackgroundColor();
                              setSettingsOpen(false); // Close popover on selection
                            } else if (value === 'custom-image') {
-                               if (backgroundType !== 'custom') { // Only trigger upload if not already custom
-                                   handleBgImageUploadClick();
-                               } else if (backgroundValue) {
-                                   // If already custom, re-apply the current custom value
-                                   setCustomBackground(backgroundValue);
-                                   // Don't close here, let the upload handler close it
-                               }
+                               // When selecting 'custom', trigger the file input
+                               handleBgImageUploadClick();
+                               // Don't close popover here, let the upload handler do it
                            } else {
+                             // This handles selecting a default image
                              setBackgroundImage(value);
                              setSettingsOpen(false); // Close popover on selection
                            }
@@ -282,18 +276,15 @@ export function ReaderControls({
                                "cursor-pointer rounded-md border p-2 hover:bg-accent hover:text-accent-foreground",
                                 radioValue === 'custom-image' && "bg-accent text-accent-foreground"
                              )}
-                              // Prevent radio change if already custom, just trigger upload
+                              // Prevent default radio change behavior if already custom, just trigger upload
                              onClick={(e) => {
-                                // Only trigger upload on click if it's *not* the currently selected custom image
-                                if (radioValue !== 'custom-image') {
-                                    // If clicking to *select* custom, don't prevent default
-                                } else {
-                                    // If clicking *while* custom is selected, trigger upload again
-                                    e.preventDefault();
-                                    handleBgImageUploadClick();
+                                if (radioValue === 'custom-image') {
+                                    e.preventDefault(); // Prevent re-selecting the radio
+                                    handleBgImageUploadClick(); // Trigger file input again
                                 }
                               }}
                            >
+                            {/* This RadioGroupItem is primarily for state management and styling */}
                             <RadioGroupItem value="custom-image" id="bg-custom-image" className="sr-only" />
                             <div className="flex flex-col items-center gap-1">
                               <ImageIcon className="w-5 h-5" />
