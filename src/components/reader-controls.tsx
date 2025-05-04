@@ -45,6 +45,7 @@ export function ReaderControls({
 }: ReaderControlsProps) {
   const fileInputRef = React.useRef<HTMLInputElement>(null);
   const bgImageInputRef = React.useRef<HTMLInputElement>(null); // Re-added
+  const [settingsOpen, setSettingsOpen] = React.useState(false); // State for popover
   const { toast } = useToast(); // Re-added
   // Re-added background hook usage
   const {
@@ -81,6 +82,7 @@ export function ReaderControls({
       reader.onload = (e) => {
         if (typeof e.target?.result === 'string') {
           setCustomBackground(e.target.result);
+          setSettingsOpen(false); // Close popover after successful custom bg set
         } else {
            toast({ title: "Error Reading File", description: "Could not read the image file.", variant: "destructive" });
         }
@@ -91,8 +93,8 @@ export function ReaderControls({
       reader.readAsDataURL(file);
     }
      if (event.target) {
-       event.target.value = '';
-     }
+       event.target.value = ''; // Reset file input
+    }
   };
 
   // Re-added radioValue calculation
@@ -163,8 +165,8 @@ export function ReaderControls({
 
       {/* Right Section: Settings Popover */}
       <div className="flex items-center justify-end flex-1">
-         {/* Re-added Settings Popover */}
-         <Popover>
+         {/* Re-added Settings Popover with controlled state */}
+         <Popover open={settingsOpen} onOpenChange={setSettingsOpen}>
             <PopoverTrigger asChild>
               <Button variant="outline" size="icon" aria-label="Settings">
                 <Settings />
@@ -223,16 +225,18 @@ export function ReaderControls({
                          onValueChange={(value) => {
                            if (value === 'theme-color') {
                              setBackgroundColor();
+                             setSettingsOpen(false); // Close popover on selection
                            } else if (value === 'custom-image') {
                                if (backgroundType !== 'custom') { // Only trigger upload if not already custom
                                    handleBgImageUploadClick();
                                } else if (backgroundValue) {
                                    // If already custom, re-apply the current custom value
-                                   // This happens if user clicks the "Custom" button itself
                                    setCustomBackground(backgroundValue);
+                                   // Don't close here, let the upload handler close it
                                }
                            } else {
                              setBackgroundImage(value);
+                             setSettingsOpen(false); // Close popover on selection
                            }
                          }}
                          className="grid grid-cols-3 gap-2"
@@ -280,7 +284,11 @@ export function ReaderControls({
                              )}
                               // Prevent radio change if already custom, just trigger upload
                              onClick={(e) => {
-                                if (radioValue === 'custom-image') {
+                                // Only trigger upload on click if it's *not* the currently selected custom image
+                                if (radioValue !== 'custom-image') {
+                                    // If clicking to *select* custom, don't prevent default
+                                } else {
+                                    // If clicking *while* custom is selected, trigger upload again
                                     e.preventDefault();
                                     handleBgImageUploadClick();
                                 }
