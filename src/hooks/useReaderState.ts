@@ -1,7 +1,7 @@
 
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { useToast } from '@/hooks/use-toast';
-import { isActualWord } from '@/lib/r'; // Use alias path
+import { isActualWord } from '@/lib/readingUtils'; // Use alias path
 import { getPunctuationType } from '@/lib/punctuationUtils'; // Assuming this file exists and is correct
 import { findChunkInfo } from '@/lib/chunkingLogic';
 import { findPreviousChunkStart, findChunkStartForWordIndex } from '@/lib/chunkNavigation';

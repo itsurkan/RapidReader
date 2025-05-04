@@ -2,7 +2,6 @@
 'use client';
 
 import * as React from 'react';
-import { Header } from '@/components/header';
 import { ReaderControls } from '@/components/reader-controls';
 import { ReadingDisplay } from '@/components/reading-display';
 import { Progress } from '@/components/ui/progress';
@@ -28,23 +27,20 @@ export default function Home() {
         goToBeginning,
         handleProgressClick,
         currentTokensForDisplay,
+        canGoNext,
+        canGoPrevious,
     } = useReaderState();
 
     // Calculate pivot index based on the *first token* of the current chunk
     const firstTokenPivotIndex = calculatePivot(currentTokensForDisplay[0] || '');
 
-    const canGoPrevious = currentIndex > 0;
-    const canGoNext = currentIndex < words.length;
-
     return (
         <div className="flex flex-col h-screen bg-background text-foreground">
-             {/* Render Header */}
-             <Header />
 
              {/* Progress bar adjusted to be below the header */}
              <Progress
                 value={progress}
-                className="w-full h-2 fixed top-14 left-0 z-10 cursor-pointer" // Positioned below header
+                className="w-full h-2 fixed top-0 left-0 z-10 cursor-pointer" // Positioned at the very top
                 onClick={(e) => {
                     const progressBar = e.currentTarget;
                     const clickX = e.clientX - progressBar.getBoundingClientRect().left;
@@ -68,8 +64,8 @@ export default function Home() {
                 }}
             />
 
-             {/* Adjust main content padding */}
-             <main className="flex-grow flex items-center justify-center overflow-hidden pt-20 pb-20 px-4"> {/* Increased pt */}
+             {/* Adjust main content padding to account for removed header and top progress bar */}
+             <main className="flex-grow flex items-center justify-center overflow-hidden pt-10 pb-20 px-4"> {/* Adjusted pt */}
                 {words.length > 0 ? (
                     <ReadingDisplay
                         tokens={currentTokensForDisplay}
@@ -103,14 +99,3 @@ export default function Home() {
         </div>
     );
 }
-
-// Potential Future Enhancements:
-// - Error handling for file read/parse
-// - More sophisticated text splitting (handling different punctuation, sentence structures)
-// - Highlighting the pivot character more reliably (might require analyzing font metrics)
-// - Remembering reading position per file
-// - Storing user settings (WPM, chunk size) in localStorage
-// - Theme switching (Light/Dark)
-// - Keyboard shortcuts for navigation/play/pause
-// - Support for more file types (PDF, DOCX - might require server-side processing or heavier libraries)
-// - Performance optimization for very large files (e.g., virtualized rendering)
