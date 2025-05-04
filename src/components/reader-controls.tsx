@@ -1,3 +1,4 @@
+
 import * as React from 'react';
 import { Settings, Play, Pause, Upload } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -14,8 +15,8 @@ import { Separator } from '@/components/ui/separator';
 interface ReaderControlsProps {
   wpm: number;
   setWpm: (wpm: number) => void;
-  wordsPerDisplay: number;
-  setWordsPerDisplay: (count: number) => void;
+  wordsPerChunkTarget: number; // Renamed from wordsPerDisplay
+  setWordsPerChunkTarget: (count: number) => void; // Renamed setter
   isPlaying: boolean;
   togglePlay: () => void;
   onFileUpload: (event: React.ChangeEvent<HTMLInputElement>) => void;
@@ -25,8 +26,8 @@ interface ReaderControlsProps {
 export function ReaderControls({
   wpm,
   setWpm,
-  wordsPerDisplay,
-  setWordsPerDisplay,
+  wordsPerChunkTarget, // Use new prop name
+  setWordsPerChunkTarget, // Use new setter name
   isPlaying,
   togglePlay,
   onFileUpload,
@@ -76,7 +77,7 @@ export function ReaderControls({
               <div className="space-y-2">
                 <h4 className="font-medium leading-none">Settings</h4>
                 <p className="text-sm text-muted-foreground">
-                  Adjust reading speed and display options.
+                  Adjust reading speed and chunk size.
                 </p>
               </div>
               <Separator />
@@ -98,19 +99,19 @@ export function ReaderControls({
               </div>
               <div className="grid gap-2">
                 <div className="grid grid-cols-3 items-center gap-4">
-                  <Label htmlFor="words-display">Words</Label>
+                  <Label htmlFor="words-chunk">Words</Label>
                    <Slider
-                    id="words-display"
+                    id="words-chunk" // Updated ID
                     min={1}
-                    max={5}
+                    max={5} // Keep max user setting reasonable, adaptive logic handles bigger temporary chunks
                     step={1}
-                    value={[wordsPerDisplay]}
-                    onValueChange={(value) => setWordsPerDisplay(value[0])}
+                    value={[wordsPerChunkTarget]} // Use new prop value
+                    onValueChange={(value) => setWordsPerChunkTarget(value[0])} // Use new setter
                     className="col-span-2"
-                     aria-label={`Words per display: ${wordsPerDisplay}`}
+                     aria-label={`Target words per chunk: ${wordsPerChunkTarget}`} // Updated aria-label
                   />
                 </div>
-                 <div className="text-center text-sm text-muted-foreground">{wordsPerDisplay} {wordsPerDisplay === 1 ? 'word' : 'words'}</div>
+                 <div className="text-center text-sm text-muted-foreground">{wordsPerChunkTarget} {wordsPerChunkTarget === 1 ? 'word' : 'words'} / chunk</div> {/* Updated text */}
               </div>
             </div>
           </PopoverContent>

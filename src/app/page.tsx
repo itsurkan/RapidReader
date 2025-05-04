@@ -17,13 +17,62 @@ function isLikelyDrmError(error: any): boolean {
   return message.includes('encrypted') || message.includes('decryption') || message.includes('content protection');
 }
 
+// Helper to check if a token is an actual word (contains letters/numbers)
+const isActualWord = (token: string): boolean => !!token && /[\p{L}\p{N}'-]+/gu.test(token);
+
+// Helper to find the indices and word count for the next chunk
+const findChunkInfo = (
+    startIndex: number,
+    targetWordCount: number,
+    allTokens: string[]
+): { endIndex: number; actualWordsInChunk: number } => {
+    let wordsFound = 0;
+    let currentIndex = startIndex;
+    while (currentIndex < allTokens.length && wordsFound < targetWordCount) {
+        if (isActualWord(allTokens[currentIndex])) {
+            wordsFound++;
+        }
+        currentIndex++;
+        // Keep advancing index after finding the target number of words,
+        // to include any trailing punctuation before the *next* word starts.
+        if (wordsFound === targetWordCount) {
+            while (currentIndex < allTokens.length && !isActualWord(allTokens[currentIndex])) {
+                currentIndex++;
+            }
+            break; // Stop after including trailing punctuation
+        }
+    }
+    // Ensure we don't exceed array bounds
+    const endIndex = Math.min(currentIndex, allTokens.length);
+
+    // Recalculate actual words within the final range [startIndex, endIndex)
+    // This handles cases where the loop stopped early (end of text)
+    let actualWordsInChunk = 0;
+    for (let i = startIndex; i < endIndex; i++) {
+        if (isActualWord(allTokens[i])) {
+            actualWordsInChunk++;
+        }
+    }
+
+    // Ensure at least one token is included if start index is valid
+    const finalEndIndex = (endIndex === startIndex && startIndex < allTokens.length) ? startIndex + 1 : endIndex;
+    if (finalEndIndex > startIndex && actualWordsInChunk === 0 && isActualWord(allTokens[startIndex])) {
+        // Handle edge case where the first token is a word but targetWordCount was 0 or loop logic failed
+        actualWordsInChunk = 1;
+    }
+
+
+    return { endIndex: finalEndIndex, actualWordsInChunk };
+};
+
 
 export default function Home() {
   const [text, setText] = useState<string>('');
-  const [words, setWords] = useState<string[]>([]);
-  const [currentIndex, setCurrentIndex] = useState<number>(0);
+  const [tokens, setTokens] = useState<string[]>([]); // Renamed from words to tokens
+  const [actualWordCount, setActualWordCount] = useState<number>(0);
+  const [currentIndex, setCurrentIndex] = useState<number>(0); // Index in the tokens array
   const [wpm, setWpm] = useState<number>(300);
-  const [wordsPerDisplay, setWordsPerDisplay] = useState<number>(1);
+  const [wordsPerChunkTarget, setWordsPerChunkTarget] = useState<number>(1); // Target *actual words* per chunk
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
   const [fileName, setFileName] = useState<string | null>(null);
   const [progress, setProgress] = useState<number>(0);
@@ -31,14 +80,13 @@ export default function Home() {
 
   // Ref for managing setTimeout
   const timeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const { toast, dismiss } = useToast(); // Destructure dismiss function
+  const { toast, dismiss } = useToast();
 
-  // Function to calculate base interval delay based on WPM and wordsPerDisplay
-  const calculateBaseInterval = useCallback(() => {
+  // Function to calculate base interval delay per *word* based on WPM
+  const calculateWordInterval = useCallback(() => {
     const effectiveWpm = Math.max(1, wpm);
-    // Calculate delay per word, then multiply by words per display
-    return (60 / effectiveWpm) * 1000 * Math.max(1, wordsPerDisplay);
-  }, [wpm, wordsPerDisplay]);
+    return (60 / effectiveWpm) * 1000;
+  }, [wpm]);
 
 
    // Simplified recursive function to extract text, adding paragraph breaks
@@ -333,11 +381,11 @@ export default function Home() {
       setProgress(0);
       setFileName(file.name);
       setText('');
-      setWords([]);
+      setTokens([]);
+      setActualWordCount(0);
       setIsAdjustingChunk(false); // Reset adaptive chunk state
 
-      const toastResult = toast({ title: 'Loading File...', description: `Processing ${file.name}` });
-      const loadingToastId = toastResult.id;
+      const loadingToast = toast({ title: 'Loading File...', description: `Processing ${file.name}` });
 
       try {
          let fileContent = '';
@@ -370,7 +418,7 @@ export default function Home() {
              console.log("parseEpub completed.");
          } else if (lowerCaseName.endsWith('.mobi')) {
             console.warn("Unsupported file type: .mobi");
-            if (loadingToastId && dismiss) dismiss(loadingToastId); // Dismiss loading toast
+            dismiss(loadingToast.id); // Dismiss loading toast
             toast({
              title: 'Unsupported Format',
              description: '.mobi files are not currently supported. Please try .txt or .epub.',
@@ -380,7 +428,7 @@ export default function Home() {
            return;
          } else {
             console.warn(`Unsupported file type: ${file.type} / ${file.name}`);
-            if (loadingToastId && dismiss) dismiss(loadingToastId); // Dismiss loading toast
+            dismiss(loadingToast.id); // Dismiss loading toast
            toast({
              title: 'Unsupported File Type',
              description: `"${file.name}" is not a supported .txt or .epub file.`,
@@ -392,33 +440,44 @@ export default function Home() {
 
          console.log(`File content length: ${fileContent.length}`);
          setText(fileContent);
-         // Improved word splitting: Handles hyphenated words, contractions, and keeps punctuation separate or attached.
+         // Improved token splitting: Handles hyphenated words, contractions, and keeps punctuation separate.
          // Matches sequences of word characters (incl. hyphens, apostrophes) OR single punctuation marks.
-         const newWords = fileContent.match(/[\p{L}\p{N}'-]+|[.,!?;:]+|\S/gu) || [];
-         // const newWords = fileContent.split(/[\s\n]+/).filter(Boolean); // Original simple split
-         console.log(`Extracted ${newWords.length} words/tokens.`);
-         setWords(newWords);
+         const newTokens = fileContent.match(/[\p{L}\p{N}'-]+|[.,!?;:]+|\S/gu) || [];
+         console.log(`Extracted ${newTokens.length} tokens.`);
+         setTokens(newTokens);
+
+         // Count actual words
+         const wordCount = newTokens.filter(isActualWord).length;
+         setActualWordCount(wordCount);
+         console.log(`Counted ${wordCount} actual words.`);
 
          // Explicitly dismiss the loading toast *before* showing success/error
-         if (loadingToastId && dismiss) dismiss(loadingToastId);
+         dismiss(loadingToast.id);
 
 
-         if (newWords.length === 0 && fileContent.length > 0) {
-             console.warn("File loaded, but no words extracted. Content might be structured unusually or contain skipped sections.");
+         if (newTokens.length === 0 && fileContent.length > 0) {
+             console.warn("File loaded, but no tokens extracted. Content might be structured unusually or contain skipped sections.");
             toast({
              title: 'Parsing Issue',
-             description: 'File loaded, but few/no words were extracted. Check content format or potential errors during parsing.',
+             description: 'File loaded, but few/no words or punctuation were extracted. Check content format or potential errors during parsing.',
              variant: 'destructive',
            });
-         } else if (newWords.length === 0) {
+         } else if (newTokens.length === 0) {
               console.warn("The loaded file appears to be empty or contains no readable text.");
              toast({
              title: 'Empty File',
              description: 'The loaded file appears to be empty or contains no readable text.',
               variant: 'destructive',
            });
+         } else if (wordCount === 0 && newTokens.length > 0) {
+             console.warn("Tokens extracted, but no actual words found (only punctuation/symbols?).");
+             toast({
+                 title: 'No Words Found',
+                 description: 'The file seems to contain only punctuation or symbols, no readable words were found.',
+                 variant: 'destructive',
+             });
          } else {
-             console.log("File loaded and words extracted successfully.");
+             console.log("File loaded and tokens extracted successfully.");
              toast({
                title: 'File Loaded',
                description: `${file.name} is ready for reading.`,
@@ -427,7 +486,7 @@ export default function Home() {
       } catch (error: any) {
          console.error('Error during file processing or parsing:', error);
           // Dismiss loading toast first, then show error
-          if (loadingToastId && dismiss) dismiss(loadingToastId);
+          dismiss(loadingToast.id);
           toast({
            title: 'Error Loading File',
            description: error.message || 'An unexpected error occurred. Check console.',
@@ -436,7 +495,8 @@ export default function Home() {
          });
          setFileName(null);
          setText('');
-         setWords([]);
+         setTokens([]);
+         setActualWordCount(0);
       } finally {
         console.log("File upload handling finished.");
         if (event.target) {
@@ -444,91 +504,108 @@ export default function Home() {
         }
       }
     },
-    [parseEpub, toast, dismiss] // Removed extractTextRecursive as it's memoized and stable
+    [parseEpub, toast, dismiss, extractTextRecursive]
   );
 
 
-  // Function to find the next punctuation mark or end of text
-  const findNextPunctuation = useCallback((startIndex: number): number => {
-    for (let i = startIndex; i < words.length; i++) {
-      // Match common sentence terminators or clause separators
-      if (words[i] && /[.,!?;:]$/.test(words[i])) {
-        return i; // Return index of the word *with* punctuation
+  // Function to find the index of the next token that is punctuation or end of text
+  const findNextPunctuationIndex = useCallback((startIndex: number): number => {
+    for (let i = startIndex; i < tokens.length; i++) {
+      // Match common sentence terminators or clause separators (as separate tokens)
+      if (tokens[i] && /^[.,!?;:]$/.test(tokens[i])) {
+        return i; // Return index of the punctuation token
       }
     }
     return -1; // Return -1 if no punctuation found before the end
-  }, [words]);
+  }, [tokens]);
 
 
-   // Memoize the calculation of chunk size and delay multiplier
-   const currentChunkAndDelay = useMemo((): { chunkSize: number; delayMultiplier: number; isAdjusted: boolean } => {
-     let chunkSize = Math.max(1, wordsPerDisplay); // Start with user setting
+   // Memoize the calculation of target chunk size (in words) and delay multiplier
+   const currentChunkSettings = useMemo((): { targetChunkWordCount: number; delayMultiplier: number; isAdjusted: boolean } => {
+     let targetChunkWordCount = Math.max(1, wordsPerChunkTarget); // Start with user setting
      let delayMultiplier = 1.0; // Base multiplier
      let localIsAdjustingChunk = false; // Use local variable to avoid direct state update
 
-     // Check the *last word of the previous chunk* for punctuation pause
+     // Check the *last token of the previous chunk* for punctuation pause
      if (currentIndex > 0) {
-       const lastWordOfPreviousChunkIndex = currentIndex - 1;
-       if (lastWordOfPreviousChunkIndex >= 0 && lastWordOfPreviousChunkIndex < words.length) {
-          const previousWord = words[lastWordOfPreviousChunkIndex];
-          if (previousWord && /[.?!]$/.test(previousWord)) {
-              // console.log(`Sentence end detected before index ${currentIndex}: "${previousWord}". Doubling delay.`);
+       const lastTokenOfPreviousChunkIndex = currentIndex - 1;
+       if (lastTokenOfPreviousChunkIndex >= 0 && lastTokenOfPreviousChunkIndex < tokens.length) {
+          const previousToken = tokens[lastTokenOfPreviousChunkIndex];
+          if (previousToken && /^[.?!]$/.test(previousToken)) {
+              // console.log(`Sentence end token detected before index ${currentIndex}: "${previousToken}". Doubling delay.`);
               delayMultiplier = 2.0; // Double delay for sentence terminators
           }
-          else if (previousWord && /[,;:]$/.test(previousWord)) {
-              // console.log(`Clause punctuation detected before index ${currentIndex}: "${previousWord}". Adding 50% delay.`);
+          else if (previousToken && /^[,;:]$/.test(previousToken)) {
+              // console.log(`Clause punctuation token detected before index ${currentIndex}: "${previousToken}". Adding 50% delay.`);
               delayMultiplier = 1.5; // 50% longer delay for commas, semicolons, colons
           }
        }
      }
 
      // --- Adaptive Chunk Size Logic ---
-     const nextPunctuationIndex = findNextPunctuation(currentIndex);
+     const nextPunctuationIdx = findNextPunctuationIndex(currentIndex);
+     let wordsUntilPunctuation = Infinity;
 
-     if (nextPunctuationIndex !== -1) {
-         const wordsUntilPunctuation = nextPunctuationIndex - currentIndex + 1;
-         // Condition: If words until punctuation is at least double the user setting
-         if (wordsUntilPunctuation >= wordsPerDisplay * 2) {
-             // console.log(`Punctuation far (${wordsUntilPunctuation} words). Increasing chunk size.`);
-             localIsAdjustingChunk = true;
-             chunkSize = Math.min(10, wordsUntilPunctuation, Math.max(wordsPerDisplay, Math.floor(wordsPerDisplay * 1.5)));
-             // Reset multiplier if chunk size is increased? Let's test keeping the multiplier based on previous word.
-             // delayMultiplier = 1.0;
-         } else {
-             // console.log(`Punctuation near (${wordsUntilPunctuation} words). Using standard chunk size.`);
-             chunkSize = wordsPerDisplay;
+     if (nextPunctuationIdx !== -1) {
+         // Count *actual words* from currentIndex up to (but not including) the punctuation
+         wordsUntilPunctuation = 0;
+         for(let i = currentIndex; i < nextPunctuationIdx; i++) {
+            if (isActualWord(tokens[i])) {
+                wordsUntilPunctuation++;
+            }
          }
      } else {
-         // console.log("No punctuation ahead. Using standard chunk size.");
-         chunkSize = wordsPerDisplay;
+        // Count words until the end if no punctuation
+        wordsUntilPunctuation = 0;
+         for(let i = currentIndex; i < tokens.length; i++) {
+             if (isActualWord(tokens[i])) {
+                 wordsUntilPunctuation++;
+             }
+         }
      }
 
-     return { chunkSize: Math.max(1, chunkSize), delayMultiplier, isAdjusted: localIsAdjustingChunk };
 
-   }, [wordsPerDisplay, currentIndex, findNextPunctuation, words]); // Recalculate when these change
+      // Condition: If words until punctuation is at least double the user setting
+      if (wordsUntilPunctuation >= wordsPerChunkTarget * 2) {
+         // console.log(`Punctuation far (${wordsUntilPunctuation} words). Increasing target chunk word count.`);
+         localIsAdjustingChunk = true;
+         // Increase target, capped at 10 words or the available words until punctuation
+         targetChunkWordCount = Math.min(10, wordsUntilPunctuation, Math.max(wordsPerChunkTarget, Math.floor(wordsPerChunkTarget * 1.5)));
+         // Reset multiplier if chunk size is increased? Let's test keeping the multiplier based on previous word.
+         // delayMultiplier = 1.0;
+     } else {
+         // console.log(`Punctuation near (${wordsUntilPunctuation} words) or end of text. Using standard target chunk word count.`);
+         targetChunkWordCount = wordsPerChunkTarget;
+     }
+
+     return { targetChunkWordCount: Math.max(1, targetChunkWordCount), delayMultiplier, isAdjusted: localIsAdjustingChunk };
+
+   }, [wordsPerChunkTarget, currentIndex, findNextPunctuationIndex, tokens]); // Recalculate when these change
 
 
    // Effect to update the isAdjustingChunk state based on the memoized calculation
    useEffect(() => {
-     setIsAdjustingChunk(currentChunkAndDelay.isAdjusted);
-   }, [currentChunkAndDelay.isAdjusted]);
+     setIsAdjustingChunk(currentChunkSettings.isAdjusted);
+   }, [currentChunkSettings.isAdjusted]);
 
 
-  // Function to advance to the next word/chunk
-  const advanceWord = useCallback(() => {
-    // Get chunk size from the memoized calculation
-    const { chunkSize } = currentChunkAndDelay;
-    const nextIndex = currentIndex + chunkSize;
+  // Function to advance to the next chunk based on word count
+  const advanceChunk = useCallback(() => {
+    // Get target word count from the memoized calculation
+    const { targetChunkWordCount } = currentChunkSettings;
 
-    if (nextIndex >= words.length) {
-        setCurrentIndex(words.length); // Go to the very end
+    // Find the end index of the next chunk based on the target word count
+    const { endIndex } = findChunkInfo(currentIndex, targetChunkWordCount, tokens);
+
+    if (endIndex >= tokens.length) {
+        setCurrentIndex(tokens.length); // Go to the very end
         setIsPlaying(false);
         toast({ title: "End of Text", description: "Finished reading." });
         if (timeoutRef.current) clearTimeout(timeoutRef.current);
     } else {
-        setCurrentIndex(nextIndex); // Move to the start of the next chunk
+        setCurrentIndex(endIndex); // Move to the start of the next chunk
     }
-  }, [currentIndex, words.length, currentChunkAndDelay, toast]); // Depend on memoized value
+  }, [currentIndex, tokens, currentChunkSettings, toast]); // Depend on memoized value and tokens
 
 
    // Effect to handle the reading timer using setTimeout for dynamic delays
@@ -538,20 +615,25 @@ export default function Home() {
        timeoutRef.current = null;
      }
 
-     if (isPlaying && words.length > 0 && currentIndex < words.length) {
-        // Get chunk size and delay multiplier from the memoized calculation
-        const { chunkSize, delayMultiplier } = currentChunkAndDelay;
+     if (isPlaying && tokens.length > 0 && currentIndex < tokens.length) {
+        // Get target word count and delay multiplier from memoized settings
+        const { targetChunkWordCount, delayMultiplier } = currentChunkSettings;
 
-        // Calculate base interval using user WPM and *base* wordsPerDisplay
-        const baseInterval = calculateBaseInterval();
+        // Calculate the actual number of words in the *upcoming* chunk
+        const { actualWordsInChunk } = findChunkInfo(currentIndex, targetChunkWordCount, tokens);
 
-        // Adjust interval based on the *actual* chunk size being displayed *and* the punctuation multiplier
-        const sizeMultiplier = chunkSize / Math.max(1, wordsPerDisplay);
-        let currentDelay = baseInterval * sizeMultiplier * delayMultiplier;
+        // Calculate base interval per word
+        const wordInterval = calculateWordInterval();
 
-       // Schedule the next advanceWord call
-       console.log(`Scheduling next word. Chunk Size: ${chunkSize}, Base Interval: ${baseInterval.toFixed(0)}ms, Size Multiplier: ${sizeMultiplier.toFixed(2)}, Punctuation Multiplier: ${delayMultiplier.toFixed(2)}, Final Delay: ${currentDelay.toFixed(0)}ms`);
-       timeoutRef.current = setTimeout(advanceWord, Math.max(50, currentDelay)); // Ensure minimum delay
+        // Calculate delay: interval per word * actual words in this chunk * punctuation multiplier
+        // Ensure actualWordsInChunk is at least 1 if the chunk isn't empty to avoid zero delay
+        const effectiveWords = Math.max(1, actualWordsInChunk);
+        let currentDelay = wordInterval * effectiveWords * delayMultiplier;
+
+
+       // Schedule the next advanceChunk call
+       console.log(`Scheduling next chunk. Target Words: ${targetChunkWordCount}, Actual Words: ${actualWordsInChunk}, Word Interval: ${wordInterval.toFixed(0)}ms, Punctuation Multiplier: ${delayMultiplier.toFixed(2)}, Final Delay: ${currentDelay.toFixed(0)}ms`);
+       timeoutRef.current = setTimeout(advanceChunk, Math.max(50, currentDelay)); // Ensure minimum delay
      }
 
      // Cleanup function
@@ -563,28 +645,33 @@ export default function Home() {
      };
    }, [
        isPlaying,
-       words, // Depends on words array content
+       tokens, // Depends on tokens array content
        currentIndex,
-       advanceWord, // This is memoized and stable
-       calculateBaseInterval, // This is memoized and stable based on wpm/wordsPerDisplay
-       currentChunkAndDelay, // Depend on memoized value
-       wordsPerDisplay // Base interval depends on this
+       advanceChunk, // This is memoized and stable
+       calculateWordInterval, // This is memoized and stable based on wpm
+       currentChunkSettings, // Depend on memoized value
      ]);
 
 
    useEffect(() => {
-    if (words.length > 0) {
-      const currentPosition = Math.min(currentIndex, words.length);
-      const currentProgress = (currentPosition / words.length) * 100;
-       setProgress(Math.min(100, Math.max(0, currentProgress)));
+    // Calculate progress based on the number of *actual words* processed so far
+    if (actualWordCount > 0) {
+        let wordsProcessed = 0;
+        for (let i = 0; i < Math.min(currentIndex, tokens.length); i++) {
+            if (isActualWord(tokens[i])) {
+                wordsProcessed++;
+            }
+        }
+        const currentProgress = (wordsProcessed / actualWordCount) * 100;
+        setProgress(Math.min(100, Math.max(0, currentProgress)));
     } else {
-      setProgress(0);
+        setProgress(0);
     }
-   }, [currentIndex, words.length]);
+   }, [currentIndex, tokens, actualWordCount]); // Depend on actualWordCount now
 
 
   const togglePlay = () => {
-    if (words.length === 0) {
+    if (tokens.length === 0) {
       toast({
         title: 'No Text Loaded',
         description: 'Please upload a file.',
@@ -592,7 +679,7 @@ export default function Home() {
       });
       return;
     }
-     if (currentIndex >= words.length) { // If at the end
+     if (currentIndex >= tokens.length) { // If at the end
         setCurrentIndex(0);
         setProgress(0);
         setIsPlaying(true); // Start from beginning
@@ -611,32 +698,32 @@ export default function Home() {
     }
   };
 
-  // Get the current chunk size from the memoized calculation
-  const { chunkSize: currentChunkSizeForDisplay } = currentChunkAndDelay;
-  const currentWords = words.slice(currentIndex, currentIndex + currentChunkSizeForDisplay);
+  // Find the chunk info for the *current* display
+  const { endIndex: currentChunkEndIndex } = findChunkInfo(currentIndex, currentChunkSettings.targetChunkWordCount, tokens);
+  const currentTokensForDisplay = tokens.slice(currentIndex, currentChunkEndIndex);
 
-   const calculatePivot = (word: string): number => {
-    if (!word) return 0;
-     // Remove trailing punctuation before calculating pivot
-     const cleanWord = word.replace(/[.,!?;:]+$/, '');
-     // Ensure length is at least 1 after cleaning
-     const len = Math.max(1, cleanWord.length);
+
+   const calculatePivot = (token: string): number => {
+    if (!token) return 0;
+     // Pivot calculation on the raw token (including any trailing punctuation)
+     // Ensure length is at least 1
+     const len = Math.max(1, token.length);
      // Pivot calculation: roughly 1/3rd of the way in, min 0, max len-1
      return Math.max(0, Math.min(Math.floor(len / 3), len - 1));
    };
 
-  // Calculate pivot based *only* on the first word of the current chunk
-  const firstWordPivotIndex = calculatePivot(currentWords[0] || '');
+  // Calculate pivot based *only* on the first token of the current display chunk
+  const firstTokenPivotIndex = calculatePivot(currentTokensForDisplay[0] || '');
 
 
   return (
     <div className="flex flex-col h-screen bg-background text-foreground">
       <Progress value={progress} className="w-full h-1 fixed top-0 left-0 z-20" />
       <main className="flex-grow flex items-center justify-center overflow-hidden pt-5 pb-20 px-4">
-        {words.length > 0 ? (
+        {tokens.length > 0 ? (
           <ReadingDisplay
-            words={currentWords}
-            pivotIndex={firstWordPivotIndex} // Pass the calculated pivot for the first word
+            tokens={currentTokensForDisplay} // Pass the tokens for the current chunk
+            pivotIndex={firstTokenPivotIndex} // Pass the calculated pivot for the first token
             isAdjusted={isAdjustingChunk} // Pass indicator for visual feedback
            />
         ) : (
@@ -650,8 +737,8 @@ export default function Home() {
       <ReaderControls
         wpm={wpm}
         setWpm={setWpm}
-        wordsPerDisplay={wordsPerDisplay}
-        setWordsPerDisplay={setWordsPerDisplay}
+        wordsPerChunkTarget={wordsPerChunkTarget} // Pass target word count
+        setWordsPerChunkTarget={setWordsPerChunkTarget} // Setter for target
         isPlaying={isPlaying}
         togglePlay={togglePlay}
         onFileUpload={handleFileUpload}
@@ -667,4 +754,3 @@ export default function Home() {
 // - Theme switching (light/dark)
 // - Font customization
 // - Support for more file types (PDF, DOCX - might require server-side processing or heavier libraries)
-

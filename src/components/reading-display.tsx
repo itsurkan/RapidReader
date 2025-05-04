@@ -3,17 +3,18 @@ import * as React from 'react';
 import { cn } from '@/lib/utils';
 
 interface ReadingDisplayProps {
-  words: string[]; // The chunk of words to display
-  pivotIndex: number; // Index of the pivot character within the *first word* of the chunk
+  tokens: string[]; // Renamed from 'words' to 'tokens'
+  pivotIndex: number; // Index of the pivot character within the *first token* of the chunk
   isAdjusted?: boolean; // Optional flag to indicate adaptive chunk size adjustment
 }
 
-export function ReadingDisplay({ words, pivotIndex, isAdjusted = false }: ReadingDisplayProps) {
-  const displayedText = words.join(' ');
+export function ReadingDisplay({ tokens, pivotIndex, isAdjusted = false }: ReadingDisplayProps) {
+  // Join tokens with a space for display
+  const displayedText = tokens.join(' ');
 
-  // Ensure the passed pivotIndex is valid within the *first word*
-  const firstWordLength = words[0]?.length || 0;
-  const validPivotIndexInFirstWord = Math.max(0, Math.min(pivotIndex, Math.max(0, firstWordLength - 1)));
+  // Ensure the passed pivotIndex is valid within the *first token*
+  const firstTokenLength = tokens[0]?.length || 0;
+  const validPivotIndexInFirstToken = Math.max(0, Math.min(pivotIndex, Math.max(0, firstTokenLength - 1)));
 
   // Highlight the character at the calculated pivot index *within the combined text*
   const highlightCharacter = (text: string, index: number) => {
@@ -32,8 +33,8 @@ export function ReadingDisplay({ words, pivotIndex, isAdjusted = false }: Readin
     );
   };
 
-  // Apply highlighting based on the first word's pivot index
-  const highlightedText = highlightCharacter(displayedText, validPivotIndexInFirstWord);
+  // Apply highlighting based on the first token's pivot index
+  const highlightedText = highlightCharacter(displayedText, validPivotIndexInFirstToken);
 
   // Generate a key based on the displayed text to force re-animation on change
   const animationKey = displayedText;
@@ -61,7 +62,8 @@ export function ReadingDisplay({ words, pivotIndex, isAdjusted = false }: Readin
         // Crude approximation for pivot alignment - relies on monospace font
         // Calculate offset based on pivot index relative to the center
         style={{
-           left: `calc(50% + ${validPivotIndexInFirstWord - (words[0]?.length || 0) / 2}ch * 0.6)`, // Adjust multiplier as needed
+           // Use the first token's length for calculation
+           left: `calc(50% + ${validPivotIndexInFirstToken - (tokens[0]?.length || 0) / 2}ch * 0.6)`, // Adjust multiplier as needed
            // Example: if pivot is 0 in "Hello" (length 5), offset = (0 - 2.5) * 0.6 = -1.5ch
            // Example: if pivot is 1 in "Hello" (length 5), offset = (1 - 2.5) * 0.6 = -0.9ch
            // Example: if pivot is 2 in "Hello" (length 5), offset = (2 - 2.5) * 0.6 = -0.3ch
