@@ -70,7 +70,8 @@ export function ReadingDisplay({ tokens, pivotIndex, isAdjusted = false }: Readi
          }}
        ></div>
 
-      <div className="text-center w-full whitespace-nowrap overflow-hidden text-ellipsis">
+      {/* Removed whitespace-nowrap, overflow-hidden, text-ellipsis to allow wrapping */}
+      <div className="text-center w-full">
          {highlightedText}
       </div>
 
