@@ -62,21 +62,24 @@ export function useBackground() {
   useEffect(() => {
     // Only apply/save after initialization to avoid premature writes and SSR issues
     if (!isInitialized || typeof window === 'undefined') return;
+    console.log(`[useBackground] Applying type: ${backgroundType}, value: ${backgroundValue.substring(0, 50)}...`); // Log value substring
 
     try {
       if (backgroundType === 'color') {
         // Remove image styles, reset background color to let CSS variables take effect
         document.body.style.backgroundImage = '';
-        document.body.style.backgroundSize = '';
-        document.body.style.backgroundPosition = '';
-        document.body.style.backgroundRepeat = '';
-        document.body.style.backgroundColor = ''; // Reset inline style
+        // document.body.style.backgroundSize = ''; // Let browser defaults handle these
+        // document.body.style.backgroundPosition = '';
+        // document.body.style.backgroundRepeat = '';
+        document.body.style.backgroundColor = ''; // Reset inline style to use CSS vars
+        console.log('[useBackground] Applied theme color background.');
         // Save preference (value is empty string for theme color)
         localStorage.setItem(LOCAL_STORAGE_KEY_TYPE, 'color');
         localStorage.setItem(LOCAL_STORAGE_KEY_VALUE, '');
       } else if (backgroundType === 'image' || backgroundType === 'custom') {
         document.body.style.backgroundImage = `url("${backgroundValue}")`;
         document.body.style.backgroundSize = 'cover';
+        // Ensure position and repeat are suitable for cover
         document.body.style.backgroundPosition = 'center';
         document.body.style.backgroundRepeat = 'no-repeat';
         // Ensure no inline background color overrides the image
@@ -84,8 +87,11 @@ export function useBackground() {
         // Save preference
         localStorage.setItem(LOCAL_STORAGE_KEY_TYPE, backgroundType);
         localStorage.setItem(LOCAL_STORAGE_KEY_VALUE, backgroundValue);
+        console.log('[useBackground] Applied image background:', backgroundValue.substring(0, 60) + '...');
       }
+       console.log('[useBackground] Body style after update:', document.body.style.backgroundImage, document.body.style.backgroundColor);
     } catch (error) {
+       // Use console.error for errors
       console.error("Error applying background or saving to localStorage:", error);
     }
   }, [backgroundType, backgroundValue, isInitialized]);
@@ -117,4 +123,3 @@ export function useBackground() {
     isInitialized, // Expose initialization state if needed by UI
   };
 }
-

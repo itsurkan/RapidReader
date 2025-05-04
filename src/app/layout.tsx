@@ -1,7 +1,7 @@
 
 'use client'; // Mark RootLayout as a Client Component to use hooks
 
-import type { Metadata } from 'next';
+// import type { Metadata } from 'next'; // Removed as it's not used directly here anymore
 import { Inter } from 'next/font/google'; // Using Inter font for clean look
 import './globals.css';
 import { Toaster } from '@/components/ui/toaster'; // Import Toaster
@@ -24,7 +24,7 @@ export default function RootLayout({
 }>) {
   // Initialize the background hook.
   // The hook itself contains the useEffect to apply the background to the body on the client-side.
-  useBackground();
+  useBackground(); // This call initializes the hook and its effects
 
   return (
     <html lang="en">
@@ -36,7 +36,7 @@ export default function RootLayout({
       </head>
       <body
         className={`${inter.className} antialiased`} // Apply font and basic styling
-        suppressHydrationWarning={true} // Add this line to suppress hydration warnings for body attributes
+        // suppressHydrationWarning={true} // Removed: Better to fix the root cause
       >
         {children}
         <Toaster /> {/* Add Toaster component */}
