@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { Settings, Play, Pause, Upload, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Settings, Play, Pause, Upload, ChevronLeft, ChevronRight, Rewind } from 'lucide-react'; // Added Rewind icon
 import { Button } from '@/components/ui/button';
 import {
   Popover,
@@ -20,10 +20,11 @@ interface ReaderControlsProps {
   togglePlay: () => void;
   onFileUpload: (event: React.ChangeEvent<HTMLInputElement>) => void;
   fileName: string | null;
-  goToNextChunk: () => void; // New prop for next chunk
-  goToPreviousChunk: () => void; // New prop for previous chunk
-  canGoNext: boolean; // New prop to enable/disable next
-  canGoPrevious: boolean; // New prop to enable/disable previous
+  goToNextChunk: () => void;
+  goToPreviousChunk: () => void;
+  goToBeginning: () => void; // New prop for beginning
+  canGoNext: boolean;
+  canGoPrevious: boolean;
 }
 
 export function ReaderControls({
@@ -37,6 +38,7 @@ export function ReaderControls({
   fileName,
   goToNextChunk,
   goToPreviousChunk,
+  goToBeginning, // Receive the new function
   canGoNext,
   canGoPrevious,
 }: ReaderControlsProps) {
@@ -68,7 +70,16 @@ export function ReaderControls({
       </div>
 
       {/* Center Section: Play/Pause and Navigation */}
-      <div className="flex items-center justify-center gap-2 flex-shrink-0"> {/* Added justify-center */}
+      <div className="flex items-center justify-center gap-1 flex-shrink-0"> {/* Reduced gap for tighter controls */}
+         <Button
+          variant="ghost"
+          size="icon"
+          onClick={goToBeginning} // Add onClick handler
+          disabled={!canGoPrevious} // Disable if already at beginning
+          aria-label="Go to Beginning"
+        >
+          <Rewind /> {/* Use Rewind icon */}
+        </Button>
          <Button
           variant="ghost" // Changed to ghost for less emphasis
           size="icon"
@@ -115,7 +126,7 @@ export function ReaderControls({
                   <Slider
                     id="wpm"
                     min={50}
-                    max={1000}
+                    max={1500} // Increased max WPM
                     step={10}
                     value={[wpm]}
                     onValueChange={(value) => setWpm(value[0])}

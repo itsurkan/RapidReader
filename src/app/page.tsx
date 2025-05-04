@@ -56,79 +56,83 @@ const findChunkInfo = (
 
         punctuationFound = getPunctuationType(token); // Check punctuation *before* incrementing currentIndex
 
-        // Lookahead Logic (only if not ending on current punctuation)
-        if (wordsInCurrentChunk >= targetWordCount && punctuationFound !== 'sentence') {
-            let lookaheadIndex = currentIndex + 1; // Start looking from the *next* token
-            let lookaheadWords = 0;
-            let firstPunctuationIndex = -1;
-
-            // Look ahead up to `maxWordExtension` additional *words* (or end of text)
-            while(lookaheadIndex < allTokens.length) {
-                const nextToken = allTokens[lookaheadIndex];
-                if (isActualWord(nextToken)) {
-                    lookaheadWords++;
-                }
-
-                const lookaheadPunctuationType = getPunctuationType(nextToken);
-                if (lookaheadPunctuationType === 'sentence' || lookaheadPunctuationType === 'clause') {
-                    firstPunctuationIndex = lookaheadIndex;
-                    break; // Found the first significant punctuation
-                }
-
-                // Stop looking if we exceed the max allowed extension *without* finding punctuation
-                if (lookaheadWords >= maxWordExtension && firstPunctuationIndex === -1) {
-                     break;
-                }
-                lookaheadIndex++;
-            }
-
-            // If we found punctuation within the allowed extension range
-            if (firstPunctuationIndex !== -1) {
-                // Calculate words if we extend to the found punctuation
-                let wordsIfExtended = 0;
-                for (let i = startIndex; i <= firstPunctuationIndex; i++) {
-                    if (isActualWord(allTokens[i])) {
-                        wordsIfExtended++;
+        // Check if we have reached the target word count or more
+        if (wordsInCurrentChunk >= targetWordCount) {
+            // Check if we've exceeded the absolute maximum allowed words
+            if (wordsInCurrentChunk > targetWordCount + maxWordExtension) {
+                // If we've gone too far, we need to backtrack.
+                // The goal is to end *before* the current token if possible,
+                // aiming for a chunk size closer to the target + max extension.
+                let backtrackIndex = currentIndex;
+                let backtrackWords = wordsInCurrentChunk;
+                while(backtrackWords > targetWordCount + maxWordExtension && backtrackIndex > startIndex) {
+                    backtrackIndex--;
+                    if (isActualWord(allTokens[backtrackIndex])) {
+                        backtrackWords--;
                     }
                 }
-
-                // Only extend if it doesn't exceed the target + max extension limit *too much*
-                if (wordsIfExtended <= targetWordCount + maxWordExtension) {
-                    currentIndex = firstPunctuationIndex; // Extend chunk to *include* punctuation
-                    wordsInCurrentChunk = wordsIfExtended; // Recalculate words in the extended chunk
-                    punctuationFound = getPunctuationType(allTokens[currentIndex]); // Update punctuation type for the new end
-                    // Now increment currentIndex one last time to point *after* the chunk
-                    currentIndex++;
-                    break; // Break after extending
-                } else {
-                    // Exceeded limit even with lookahead, break where we were (before lookahead)
-                    // currentIndex is already pointing to the last token considered *before* lookahead started
-                    // But we need to break the loop
-                    currentIndex++; // Increment to exit the loop correctly
-                    break;
-                }
-            } else {
-                // No punctuation found within allowed range, or lookahead wasn't triggered.
-                // Break at the current point
-                currentIndex++; // Increment to exit the loop correctly
-                break;
+                // Use the backtrack index + 1 as the end index
+                currentIndex = backtrackIndex + 1;
+                break; // Force break after backtracking
             }
-        } else {
-             // Move to the next token index if we haven't met the condition or found punctuation
-             currentIndex++;
+
+
+            // If we are at or above target, and found sentence/clause end, break here.
+            if (punctuationFound === 'sentence' || (punctuationFound === 'clause' && wordsSinceLastPunctuation >= Math.max(1, Math.ceil(targetWordCount / 1.5)))) {
+                 currentIndex++; // Increment to include the punctuation in the *end* index calculation
+                 break;
+            }
+
+            // Lookahead Logic (only if not ending on current punctuation and not exceeding max extension yet)
+            if (punctuationFound !== 'sentence' && wordsInCurrentChunk <= targetWordCount + maxWordExtension) {
+                let lookaheadIndex = currentIndex + 1; // Start looking from the *next* token
+                let lookaheadWords = 0;
+                let firstPunctuationIndex = -1;
+                let wordsAtFirstPunctuation = -1;
+
+                // Look ahead up to `maxWordExtension` additional *words* (or end of text)
+                while (lookaheadIndex < allTokens.length) {
+                    const nextToken = allTokens[lookaheadIndex];
+                    let foundPunctuation = false;
+                    if (isActualWord(nextToken)) {
+                        lookaheadWords++;
+                    }
+
+                    const lookaheadPunctuationType = getPunctuationType(nextToken);
+                    if (lookaheadPunctuationType === 'sentence' || lookaheadPunctuationType === 'clause') {
+                         // Only consider this punctuation if it doesn't grossly exceed the max extension
+                         if (wordsInCurrentChunk + lookaheadWords <= targetWordCount + maxWordExtension) {
+                             firstPunctuationIndex = lookaheadIndex;
+                             wordsAtFirstPunctuation = wordsInCurrentChunk + lookaheadWords;
+                             foundPunctuation = true;
+                         }
+                         break; // Found the first significant punctuation (or exceeded limit)
+                    }
+
+
+                    // Stop looking if we exceed the max allowed extension *without* finding punctuation
+                    if (lookaheadWords >= maxWordExtension) {
+                        break;
+                    }
+                    lookaheadIndex++;
+                }
+
+
+                // If we found punctuation within the allowed extension range
+                if (firstPunctuationIndex !== -1) {
+                    currentIndex = firstPunctuationIndex + 1; // Extend chunk to point *after* punctuation
+                    break; // Break after extending
+                }
+                // else: No suitable punctuation found within range, loop will continue or break naturally if end of text
+            }
+            // If lookahead wasn't needed or didn't extend, continue to next token in main loop
         }
 
-        // End chunk immediately if a sentence-ending punctuation is found
-        if (punctuationFound === 'sentence') {
-            break;
-        }
+        // Move to the next token index if we haven't met the target count yet
+        currentIndex++;
 
-        // End chunk if a clause-ending punctuation is found AND we have a reasonable number of words *since the last punctuation*
-        if (punctuationFound === 'clause' && wordsSinceLastPunctuation >= Math.max(1, Math.ceil(targetWordCount / 1.5))) {
-             wordsSinceLastPunctuation = 0; // Reset counter after a clause break
-            break;
-        }
-        // Reset counter if clause punctuation found but not enough words followed
+
+        // Reset punctuation tracking if needed *after* checking lookahead
         if (punctuationFound === 'clause') {
              wordsSinceLastPunctuation = 0;
         }
@@ -233,8 +237,8 @@ export default function Home() {
   const [words, setWords] = useState<string[]>([]); // Holds all tokens (words and punctuation)
   const [actualWordCount, setActualWordCount] = useState<number>(0); // Count of actual words only
   const [currentIndex, setCurrentIndex] = useState<number>(0); // Index in the words array
-  const [wpm, setWpm] = useState<number>(300);
-  const [chunkWordTarget, setChunkWordTarget] = useState<number>(2); // Target *approximate words* per chunk display
+  const [wpm, setWpm] = useState<number>(1000); // Default WPM set to 1000
+  const [chunkWordTarget, setChunkWordTarget] = useState<number>(4); // Default chunk size set to 4
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
   const [fileName, setFileName] = useState<string | null>(null);
   const [progress, setProgress] = useState<number>(0);
@@ -246,7 +250,7 @@ export default function Home() {
     dismiss: () => void;
     update: (props: any) => void;
   } | null>(null); // Ref to store toast controller
-  const { toast } = useToast();
+  const { toast, dismiss: dismissToast } = useToast(); // Destructure dismiss from useToast
 
 
   // Function to calculate base interval delay per *word* based on WPM
@@ -455,7 +459,7 @@ export default function Home() {
         } finally {
             // Dismiss loading toast when done (success or error) using the controller
             if (toastCtrlRef.current) {
-                toastCtrlRef.current.dismiss();
+                dismissToast(toastCtrlRef.current.id); // Use dismissToast function
                 toastCtrlRef.current = null; // Clear ref after dismissing
             }
             if (book && typeof book.destroy === 'function') {
@@ -463,7 +467,7 @@ export default function Home() {
             }
         }
     });
-   }, [toast, extractTextRecursive]);
+   }, [toast, dismissToast, extractTextRecursive]); // Include dismissToast
 
 
   const handleFileUpload = useCallback(
@@ -516,10 +520,14 @@ export default function Home() {
          setActualWordCount(wordCount);
          console.log(`Counted ${wordCount} actual words.`);
 
-         // Dismiss the initial loading toast IF parseEpub didn't handle it (i.e., it was a TXT file)
-         if (toastCtrlRef.current && loadingToastId === toastCtrlRef.current.id && !lowerCaseName.endsWith('.epub')) {
-             toastCtrlRef.current.dismiss();
-             toastCtrlRef.current = null;
+
+         // Explicitly dismiss the loading toast *before* showing success/error
+         if (loadingToastId) {
+            dismissToast(loadingToastId);
+            // Ensure the ref is cleared if this was the toast we were tracking
+            if (toastCtrlRef.current?.id === loadingToastId) {
+                 toastCtrlRef.current = null;
+            }
          }
 
 
@@ -534,22 +542,24 @@ export default function Home() {
          }
       } catch (error: any) {
          console.error('Error loading file:', error);
-          // Dismiss loading toast if it exists and hasn't been dismissed by parseEpub
-         if (toastCtrlRef.current && loadingToastId === toastCtrlRef.current.id) {
-            toastCtrlRef.current.dismiss();
-            toastCtrlRef.current = null;
+          // Dismiss loading toast if it exists and hasn't been dismissed yet
+         if (loadingToastId) {
+            dismissToast(loadingToastId);
+            if (toastCtrlRef.current?.id === loadingToastId) {
+                 toastCtrlRef.current = null;
+            }
          }
          toast({ title: 'Error Loading File', description: error.message || 'Unknown error.', variant: 'destructive', duration: 7000 });
          setFileName(null); setText(''); setWords([]); setActualWordCount(0);
       } finally {
         if (event.target) event.target.value = ''; // Clear file input
-        // Ensure the ref is cleared if an error happened before parseEpub finished
-        if (toastCtrlRef.current && loadingToastId === toastCtrlRef.current.id) {
+        // Ensure the ref is cleared if an error happened and the toast might still be referenced
+        if (toastCtrlRef.current?.id === loadingToastId) {
             toastCtrlRef.current = null;
         }
       }
     },
-    [parseEpub, toast] // Keep parseEpub and toast as dependencies
+    [parseEpub, toast, dismissToast] // Include dismissToast
   );
 
 
@@ -654,6 +664,13 @@ export default function Home() {
      setCurrentIndex(previousStartIndex);
    }, [currentIndex, chunkWordTarget, words, isPlaying]);
 
+   const goToBeginning = useCallback(() => {
+     if (isPlaying) setIsPlaying(false);
+     setCurrentIndex(0);
+     setProgress(0);
+     toast({ title: "Jumped to Beginning" });
+   }, [isPlaying, toast]);
+
    // --- Progress Bar Click Handling ---
    const handleProgressClick = useCallback((clickPercentage: number) => {
      if (actualWordCount === 0 || words.length === 0) return;
@@ -737,6 +754,7 @@ export default function Home() {
         fileName={fileName}
         goToNextChunk={goToNextChunk}
         goToPreviousChunk={goToPreviousChunk}
+        goToBeginning={goToBeginning} // Pass the new function
         canGoPrevious={currentIndex > 0}
         canGoNext={currentIndex < words.length}
       />
@@ -746,7 +764,6 @@ export default function Home() {
 
 // Potential Future Enhancements:
 // - Loading indicator during file processing/parsing
-// - More sophisticated punctuation handling (e.g., different delays for different types)
 // - User settings persistence (localStorage)
 // - Bookmark/Save progress feature
 // - Theme toggle (light/dark)
