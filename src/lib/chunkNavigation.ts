@@ -1,6 +1,6 @@
 
 import { findChunkInfo } from './chunkingLogic'; // Assuming findChunkInfo is in chunkingLogic.ts
-import { isActualWord } from './readingUtils'; // Import from readingUtils
+import { isActualWord } from '@/lib/wordUtils'; // Import from wordUtils using alias
 
 // Helper to find the start index of the *previous* chunk
 export const findPreviousChunkStart = (

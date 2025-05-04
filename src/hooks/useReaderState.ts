@@ -2,7 +2,7 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { useToast } from '@/hooks/use-toast';
 import { isActualWord } from '@/lib/wordUtils'; // Assuming this file exists and is correct
-import { getPunctuationType } from '@/lib/punctuationUtils'; // Assuming this file exists and is correct
+import { getPunctuationType } from '@/lib/punctuationUtils'; // Correct path
 import { findChunkInfo } from '@/lib/chunkingLogic';
 import { findPreviousChunkStart, findChunkStartForWordIndex } from '@/lib/chunkNavigation';
 import { parseEpub } from '@/lib/epub/epubParser'; // Use alias path

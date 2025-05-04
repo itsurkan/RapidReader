@@ -1,5 +1,6 @@
 
-import { isActualWord, getPunctuationType } from './readingUtils';
+import { isActualWord } from './wordUtils'; // Correct path
+import { getPunctuationType } from './punctuationUtils'; // Correct path
 
 interface ChunkInfo {
     endIndex: number; // Index *after* the last token in the chunk
