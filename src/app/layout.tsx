@@ -1,7 +1,6 @@
 
 'use client'; // Mark RootLayout as a Client Component to use hooks
 
-// import type { Metadata } from 'next'; // Removed as it's not used directly here anymore
 import { Inter } from 'next/font/google'; // Using Inter font for clean look
 import './globals.css';
 import { Toaster } from '@/components/ui/toaster'; // Import Toaster
@@ -27,7 +26,7 @@ export default function RootLayout({
   useBackground(); // This call initializes the hook and its effects
 
   return (
-    <html lang="en">
+    <html lang="en" suppressHydrationWarning={true}> {/* Add suppressHydrationWarning here */}
       <head>
          {/* Keep static metadata here */}
          <title>RapidReader</title>
@@ -36,7 +35,7 @@ export default function RootLayout({
       </head>
       <body
         className={`${inter.className} antialiased`} // Apply font and basic styling
-        // suppressHydrationWarning={true} // Removed: Better to fix the root cause
+        // suppressHydrationWarning={true} // Alternatively, put it here, but <html> is often preferred.
       >
         {children}
         <Toaster /> {/* Add Toaster component */}
