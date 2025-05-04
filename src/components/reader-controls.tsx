@@ -15,8 +15,8 @@ import { Separator } from '@/components/ui/separator';
 interface ReaderControlsProps {
   wpm: number;
   setWpm: (wpm: number) => void;
-  wordsPerChunkTarget: number; // Renamed from wordsPerDisplay
-  setWordsPerChunkTarget: (count: number) => void; // Renamed setter
+  chunkWordTarget: number; // Renamed from wordsPerChunkTarget
+  setChunkWordTarget: (count: number) => void; // Renamed setter
   isPlaying: boolean;
   togglePlay: () => void;
   onFileUpload: (event: React.ChangeEvent<HTMLInputElement>) => void;
@@ -26,8 +26,8 @@ interface ReaderControlsProps {
 export function ReaderControls({
   wpm,
   setWpm,
-  wordsPerChunkTarget, // Use new prop name
-  setWordsPerChunkTarget, // Use new setter name
+  chunkWordTarget, // Use new prop name
+  setChunkWordTarget, // Use new setter name
   isPlaying,
   togglePlay,
   onFileUpload,
@@ -103,15 +103,15 @@ export function ReaderControls({
                    <Slider
                     id="words-chunk" // Updated ID
                     min={1}
-                    max={5} // Keep max user setting reasonable, adaptive logic handles bigger temporary chunks
+                    max={10} // Allow user to set higher target, actual chunking might differ
                     step={1}
-                    value={[wordsPerChunkTarget]} // Use new prop value
-                    onValueChange={(value) => setWordsPerChunkTarget(value[0])} // Use new setter
+                    value={[chunkWordTarget]} // Use new prop value
+                    onValueChange={(value) => setChunkWordTarget(value[0])} // Use new setter
                     className="col-span-2"
-                     aria-label={`Target words per chunk: ${wordsPerChunkTarget}`} // Updated aria-label
+                     aria-label={`Target words per chunk: ${chunkWordTarget}`} // Updated aria-label
                   />
                 </div>
-                 <div className="text-center text-sm text-muted-foreground">{wordsPerChunkTarget} {wordsPerChunkTarget === 1 ? 'word' : 'words'} / chunk</div> {/* Updated text */}
+                 <div className="text-center text-sm text-muted-foreground">{chunkWordTarget} {chunkWordTarget === 1 ? 'word' : 'words'} / chunk</div> {/* Updated text */}
               </div>
             </div>
           </PopoverContent>

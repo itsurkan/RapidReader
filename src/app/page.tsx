@@ -7,7 +7,7 @@ import type { Book } from 'epubjs'; // Import epubjs types only
 import { ReaderControls } from '@/components/reader-controls';
 import { ReadingDisplay } from '@/components/reading-display';
 import { Progress } from '@/components/ui/progress';
-import { useToast } from '@/hooks/use-toast'; // Correct import
+import { useToast } from '@/hooks/use-toast';
 import { cn } from '@/lib/utils';
 
 // Helper function to check if an error might be related to DRM
@@ -17,66 +17,87 @@ function isLikelyDrmError(error: any): boolean {
   return message.includes('encrypted') || message.includes('decryption') || message.includes('content protection');
 }
 
-// Helper to check if a token is an actual word (contains letters/numbers)
+// Helper to check if a token (split by whitespace) contains letters/numbers
 const isActualWord = (token: string): boolean => !!token && /[\p{L}\p{N}'-]+/gu.test(token);
 
-// Helper to find the indices and word count for the next chunk
+// Helper function to determine punctuation type at the end of a token
+const getPunctuationType = (token: string): 'sentence' | 'clause' | 'none' => {
+    if (!token) return 'none';
+    if (/[.?!]$/.test(token)) return 'sentence';
+    if (/[,;:]$/.test(token)) return 'clause';
+    return 'none';
+};
+
+// Helper to find the indices and word count for the next chunk based on logical pieces
 const findChunkInfo = (
     startIndex: number,
-    targetWordCount: number,
+    targetWordCount: number, // Approximate target words per displayed chunk
     allTokens: string[]
 ): { endIndex: number; actualWordsInChunk: number } => {
-    let wordsFound = 0;
+    if (startIndex >= allTokens.length) {
+        return { endIndex: startIndex, actualWordsInChunk: 0 };
+    }
+
+    let wordsInCurrentChunk = 0;
     let currentIndex = startIndex;
-    while (currentIndex < allTokens.length && wordsFound < targetWordCount) {
-        if (isActualWord(allTokens[currentIndex])) {
-            wordsFound++;
+
+    while (currentIndex < allTokens.length) {
+        const token = allTokens[currentIndex];
+        if (isActualWord(token)) {
+            wordsInCurrentChunk++;
         }
-        currentIndex++;
-        // Keep advancing index after finding the target number of words,
-        // to include any trailing punctuation before the *next* word starts.
-        if (wordsFound === targetWordCount) {
-            while (currentIndex < allTokens.length && !isActualWord(allTokens[currentIndex])) {
-                currentIndex++;
-            }
-            break; // Stop after including trailing punctuation
+
+        currentIndex++; // Move to the next token index
+
+        const punctuationType = getPunctuationType(token);
+
+        // End chunk if a sentence-ending punctuation is found
+        if (punctuationType === 'sentence') {
+            break;
+        }
+
+        // End chunk if a clause-ending punctuation is found AND we have a reasonable number of words
+        // Adjust the threshold (e.g., targetWordCount / 2) as needed
+        if (punctuationType === 'clause' && wordsInCurrentChunk >= Math.max(1, Math.ceil(targetWordCount / 2))) {
+            break;
+        }
+
+        // End chunk if we've reached or exceeded the target word count
+        if (wordsInCurrentChunk >= targetWordCount) {
+             // Optional: Look ahead slightly? Maybe not needed if punctuation handling is good.
+            break;
         }
     }
-    // Ensure we don't exceed array bounds
-    const endIndex = Math.min(currentIndex, allTokens.length);
 
-    // Recalculate actual words within the final range [startIndex, endIndex)
-    // This handles cases where the loop stopped early (end of text)
-    let actualWordsInChunk = 0;
+     // Ensure endIndex doesn't exceed bounds
+     const endIndex = Math.min(currentIndex, allTokens.length);
+
+    // Recalculate actual words within the final chunk [startIndex, endIndex)
+    let actualWordsCount = 0;
     for (let i = startIndex; i < endIndex; i++) {
         if (isActualWord(allTokens[i])) {
-            actualWordsInChunk++;
+            actualWordsCount++;
         }
     }
 
-    // Ensure at least one token is included if start index is valid
-    const finalEndIndex = (endIndex === startIndex && startIndex < allTokens.length) ? startIndex + 1 : endIndex;
-    if (finalEndIndex > startIndex && actualWordsInChunk === 0 && isActualWord(allTokens[startIndex])) {
-        // Handle edge case where the first token is a word but targetWordCount was 0 or loop logic failed
-        actualWordsInChunk = 1;
-    }
+     // Ensure at least one token is always included if possible
+     const finalEndIndex = (endIndex === startIndex && startIndex < allTokens.length) ? startIndex + 1 : endIndex;
 
-
-    return { endIndex: finalEndIndex, actualWordsInChunk };
+    return { endIndex: finalEndIndex, actualWordsInChunk: actualWordsCount };
 };
 
 
 export default function Home() {
   const [text, setText] = useState<string>('');
-  const [tokens, setTokens] = useState<string[]>([]); // Renamed from words to tokens
+  const [tokens, setTokens] = useState<string[]>([]); // Tokens are now split by whitespace
   const [actualWordCount, setActualWordCount] = useState<number>(0);
   const [currentIndex, setCurrentIndex] = useState<number>(0); // Index in the tokens array
   const [wpm, setWpm] = useState<number>(300);
-  const [wordsPerChunkTarget, setWordsPerChunkTarget] = useState<number>(1); // Target *actual words* per chunk
+  const [chunkWordTarget, setChunkWordTarget] = useState<number>(2); // Target *approximate words* per chunk display
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
   const [fileName, setFileName] = useState<string | null>(null);
   const [progress, setProgress] = useState<number>(0);
-  const [isAdjustingChunk, setIsAdjustingChunk] = useState<boolean>(false);
+  const [isAdjustingChunk, setIsAdjustingChunk] = useState<boolean>(false); // Maybe reuse later if needed
 
   // Ref for managing setTimeout
   const timeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -95,52 +116,48 @@ export default function Home() {
        if (!node) return '';
 
        if (node.nodeType === Node.TEXT_NODE) {
-           // Append trimmed text node content
            const trimmed = node.textContent?.trim();
            if (trimmed) {
-               // Add a space only if the current text isn't empty and doesn't end with whitespace
-               if (currentText.length > 0 && !/[\s\n]$/.test(currentText)) {
+                // Add space if needed before appending
+                if (currentText.length > 0 && !/\s$/.test(currentText)) {
                     currentText += ' ';
-               }
-               currentText += trimmed;
+                }
+                currentText += trimmed;
            }
        } else if (node.nodeType === Node.ELEMENT_NODE) {
            const element = node as HTMLElement;
            const tagName = element.tagName.toUpperCase();
-           // Consider common block-level elements for paragraph breaks
-           const isBlock = ['P', 'DIV', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'LI', 'BLOCKQUOTE', 'PRE', 'HR', 'TABLE', 'TR', 'SECTION', 'ARTICLE', 'HEADER', 'FOOTER', 'ASIDE', 'NAV'].includes(tagName);
+           const isBlock = ['P', 'DIV', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'LI', 'BLOCKQUOTE', 'PRE', 'HR', 'TABLE', 'TR', 'SECTION', 'ARTICLE', 'HEADER', 'FOOTER', 'ASIDE', 'NAV', 'UL', 'OL'].includes(tagName);
             const isLineBreak = tagName === 'BR';
 
-           // Add break *before* processing children of a block element, if text exists and doesn't already end with a double break
+           // Add double newline *before* processing children of a block element, if text exists
            if (isBlock && currentText.length > 0 && !currentText.endsWith('\n\n')) {
-                // Prefer double newline, but settle for single if already ending with single
-               currentText += currentText.endsWith('\n') ? '\n' : '\n\n';
+                currentText += currentText.endsWith('\n') ? '\n' : '\n\n';
            }
 
            for (let i = 0; i < node.childNodes.length; i++) {
                 const childText = extractTextRecursive(node.childNodes[i]);
-                // Append child text, adding space if necessary
                 if (childText) {
-                    if (currentText.length > 0 && !/[\s\n]$/.test(currentText) && !/^[.,!?;:]/.test(childText)) {
+                    // Add space if needed before appending child text
+                    if (currentText.length > 0 && !/\s$/.test(currentText) && !/^\s/.test(childText) && !/^[.,!?;:]/.test(childText)) {
                         currentText += ' ';
                     }
                     currentText += childText;
                 }
            }
 
-            // Add break *after* processing children of a block element or BR, if text was added and doesn't end with double break
-           if ((isBlock || isLineBreak) && currentText.length > 0 && !currentText.endsWith('\n\n')) {
+            // Add double newline *after* processing children of a block element or BR
+            if ((isBlock || isLineBreak) && currentText.length > 0 && !currentText.endsWith('\n\n')) {
                  currentText += currentText.endsWith('\n') ? '\n' : '\n\n';
            }
        }
        return currentText;
-   }, []); // No external dependencies needed for this pure function logic
+   }, []);
 
 
   const parseEpub = useCallback(async (file: File): Promise<string> => {
-    // Dynamically import epubjs only when needed
     const Epub = (await import('epubjs')).default;
-    let book: Book | null = null; // Keep track of the book instance for cleanup
+    let book: Book | null = null;
 
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
@@ -151,31 +168,25 @@ export default function Home() {
         }
         try {
           console.log("FileReader successful, attempting to load EPUB...");
-          // Use ArrayBuffer directly
           const arrayBuffer = e.target.result as ArrayBuffer;
           console.log(`EPUB ArrayBuffer size: ${arrayBuffer.byteLength}`);
 
-          // Instantiate Epub with the ArrayBuffer
-          book = Epub(arrayBuffer, { encoding: 'binary' }); // Try adding encoding option
+          book = Epub(arrayBuffer, { encoding: 'binary' });
 
-          // Listen for book:error event which might indicate DRM or corruption early
           book.on('book:error', (err: any) => {
             console.error('EPUB Book Error Event:', err);
-            // Explicitly reject on critical errors signaled by the book itself
             reject(new Error(`EPUB loading error: ${err.message || 'Unknown error during book initialization.'} ${isLikelyDrmError(err) ? ' (Possible DRM)' : ''}`));
           });
 
           console.log("EPUB instance created, awaiting book.ready...");
 
-          // Wrap book.ready in a timeout mechanism
-          const readyTimeout = 30000; // 30 seconds timeout for book.ready
+          const readyTimeout = 30000;
           const readyPromise = book.ready;
           const timeoutPromise = new Promise((_, rejectTimeout) =>
             setTimeout(() => rejectTimeout(new Error(`EPUB book.ready timed out after ${readyTimeout / 1000} seconds.`)), readyTimeout)
           );
 
           await Promise.race([readyPromise, timeoutPromise]);
-          // If we reached here, book.ready resolved before the timeout
 
           console.log("book.ready resolved. Metadata:", book.metadata);
           console.log("Processing spine items...");
@@ -192,9 +203,7 @@ export default function Home() {
             try {
                 console.log(`Loading section ${i + 1}/${totalSections} (ID: ${item.idref || 'unknown'}, Href: ${item.href})...`);
 
-                // Attempt to load the section's content as a Document
-                // Add timeout for section loading as well
-                const loadTimeout = 15000; // 15 seconds per section
+                const loadTimeout = 15000;
                 const sectionLoadPromise = item.load(book.load.bind(book)).then(sectionContent => {
                     if (!sectionContent) {
                         throw new Error(`Section ${item.idref || item.href} load resulted in null or undefined content.`);
@@ -206,12 +215,12 @@ export default function Home() {
                   setTimeout(() => rejectSectionTimeout(new Error(`Loading section ${item.idref || item.href} timed out after ${loadTimeout / 1000} seconds.`)), loadTimeout)
                 );
 
-                const section = await Promise.race([sectionLoadPromise, sectionTimeoutPromise]) as Document | string | any; // Be more flexible with the type initially
+                const section = await Promise.race([sectionLoadPromise, sectionTimeoutPromise]) as Document | string | any;
 
                 console.log(`Section ${item.idref || item.href} loaded. Type: ${typeof section}`);
 
                 let sectionText = '';
-                if (section && typeof (section as any).querySelector === 'function') { // Check if it behaves like a Document/Element
+                if (section && typeof (section as any).querySelector === 'function') {
                     const body = (section as Document).body;
                     if (body) {
                         console.log(`Extracting text from body of section ${item.idref || item.href}.`);
@@ -226,11 +235,9 @@ export default function Home() {
                          }
                     }
                 } else if (typeof section === 'string') {
-                    // Handle cases where the section loads as raw HTML string
                     console.warn(`Section ${item.idref || item.href} loaded as a string. Attempting basic HTML parse.`);
-                    // Use DOMParser for safer parsing than innerHTML
                     const parser = new DOMParser();
-                    const doc = parser.parseFromString(section, item.mediaType || 'text/html'); // Use mediaType if available
+                    const doc = parser.parseFromString(section, item.mediaType || 'text/html');
                     sectionText = extractTextRecursive(doc.body || doc.documentElement);
                     if(sectionText) {
                        console.log(`Extracted text from string-based section ${item.idref || item.href}.`);
@@ -238,12 +245,10 @@ export default function Home() {
                        console.warn(`Failed to extract text from string-based section ${item.idref || item.href}.`);
                     }
                 } else if (section instanceof Blob || section instanceof ArrayBuffer) {
-                    // Attempt to decode if it's binary data (e.g., an image mistakenly in spine?)
                     console.warn(`Section ${item.idref || item.href} loaded as Blob/ArrayBuffer. Attempting text decode.`);
                     try {
                         const blob = (section instanceof ArrayBuffer) ? new Blob([section]) : section;
                         const decodedText = await blob.text();
-                        // If it decodes, try parsing as HTML
                          const parser = new DOMParser();
                          const doc = parser.parseFromString(decodedText, item.mediaType || 'text/html');
                          sectionText = extractTextRecursive(doc.body || doc.documentElement);
@@ -261,32 +266,26 @@ export default function Home() {
                 }
 
                  if (sectionText) {
-                     // Add double newline between sections for clarity, only if text exists
                      fullText += sectionText.trim() + '\n\n';
                  } else {
                      console.warn(`Section ${item.idref || item.href} parsing yielded no text.`);
-                     // Only count as error if loading *didn't* error but no text came out
-                     // sectionErrors++; Let's not count empty sections as errors for now
                  }
 
             } catch (sectionError: any) {
                 console.error(`Error processing section ${i + 1}/${totalSections} (ID: ${item.idref || item.href}):`, sectionError.message || sectionError);
                 sectionErrors++;
-                 // Add a marker for skipped sections
                  fullText += `\n\n[Section "${item.idref || item.href || 'Unknown'}" Skipped Due To Error: ${sectionError.message || 'Unknown error'}]\n\n`;
             }
           }
           console.log(`Finished processing ${totalSections} sections with ${sectionErrors} errors.`);
 
-           // Clean up excessive whitespace and line breaks more carefully
-           fullText = fullText.replace(/[ \t]{2,}/g, ' '); // Consolidate multiple spaces/tabs to single space
-           fullText = fullText.replace(/(\r\n|\r|\n)[ \t]*(\r\n|\r|\n)/g, '\n\n'); // Consolidate multiple newlines (with optional space in between) to max 2
-           fullText = fullText.replace(/(\n\n){2,}/g, '\n\n'); // Ensure max 2 consecutive newlines
-           fullText = fullText.trim(); // Trim leading/trailing whitespace
+           fullText = fullText.replace(/[ \t]{2,}/g, ' ');
+           fullText = fullText.replace(/(\r\n|\r|\n)[ \t]*(\r\n|\r|\n)/g, '\n\n');
+           fullText = fullText.replace(/(\n\n){2,}/g, '\n\n');
+           fullText = fullText.trim();
            console.log(`Extracted text length (after cleanup): ${fullText.length}`);
 
            if (fullText.length === 0 && totalSections > 0 && sectionErrors === totalSections) {
-               // If no text was extracted AT ALL, and ALL sections errored out, then reject.
                 console.error("EPUB parsing failed completely. All sections encountered errors.");
                reject(new Error(`Failed to extract any text content. All ${totalSections} sections failed to load or parse.`));
            } else if (fullText.length === 0 && totalSections > 0) {
@@ -299,16 +298,16 @@ export default function Home() {
                    toast({
                      title: 'Parsing Warning',
                      description: `EPUB parsed with ${sectionErrors} error(s). Some content might be missing or skipped.`,
-                     variant: 'destructive', // Use 'destructive' style for warnings too
-                     duration: 5000, // Make warning slightly longer
+                     variant: 'destructive',
+                     duration: 5000,
                    });
                 } else {
                    console.log("EPUB parsing and text extraction successful.");
                 }
-                resolve(fullText); // Resolve even if there were non-critical errors or partial content
+                resolve(fullText);
            }
 
-        } catch (error: any) { // Catch errors during initial book loading or overall process
+        } catch (error: any) {
             console.error("Critical EPUB Processing Error:", error);
             let errorMessage = "Error parsing EPUB file.";
 
@@ -319,7 +318,7 @@ export default function Home() {
                 errorMessage += " The file appears corrupted or is not a valid EPUB (ZIP archive).";
                 console.error("EPUB file seems corrupted or invalid format.");
             } else if (error.message?.includes('timed out')) {
-                 errorMessage += ` ${error.message}`; // Include the timeout message
+                 errorMessage += ` ${error.message}`;
                  console.error("EPUB processing timed out.");
             }
             else if (error.message) {
@@ -327,9 +326,8 @@ export default function Home() {
             } else {
                  errorMessage += " It might be corrupted, in an unsupported format, or have internal structure issues.";
             }
-            reject(new Error(errorMessage)); // Reject on critical initial loading errors
+            reject(new Error(errorMessage));
         } finally {
-             // Clean up the book instance to free resources
              try {
                 if (book && typeof book.destroy === 'function') {
                     console.log("Destroying epubjs book instance...");
@@ -345,7 +343,6 @@ export default function Home() {
       };
       reader.onerror = (e) => {
         console.error("FileReader error:", reader.error);
-        // Ensure book cleanup if FileReader fails after book might have been initialized (less likely path)
         if (book && typeof book.destroy === 'function') {
             try { book.destroy(); } catch (err) { console.warn("Error destroying book after FileReader error:", err); }
         }
@@ -360,9 +357,9 @@ export default function Home() {
       }
 
       console.log(`Starting FileReader for ${file.name}...`);
-      reader.readAsArrayBuffer(file); // Use readAsArrayBuffer for epubjs
+      reader.readAsArrayBuffer(file);
     });
-   }, [toast, extractTextRecursive]); // extractTextRecursive is memoized
+   }, [toast, extractTextRecursive]);
 
 
   const handleFileUpload = useCallback(
@@ -383,9 +380,10 @@ export default function Home() {
       setText('');
       setTokens([]);
       setActualWordCount(0);
-      setIsAdjustingChunk(false); // Reset adaptive chunk state
+      setIsAdjustingChunk(false);
 
       const loadingToast = toast({ title: 'Loading File...', description: `Processing ${file.name}` });
+      const loadingToastId = loadingToast.id; // Store the ID
 
       try {
          let fileContent = '';
@@ -418,7 +416,7 @@ export default function Home() {
              console.log("parseEpub completed.");
          } else if (lowerCaseName.endsWith('.mobi')) {
             console.warn("Unsupported file type: .mobi");
-            dismiss(loadingToast.id); // Dismiss loading toast
+            dismiss(loadingToastId); // Dismiss loading toast
             toast({
              title: 'Unsupported Format',
              description: '.mobi files are not currently supported. Please try .txt or .epub.',
@@ -428,7 +426,7 @@ export default function Home() {
            return;
          } else {
             console.warn(`Unsupported file type: ${file.type} / ${file.name}`);
-            dismiss(loadingToast.id); // Dismiss loading toast
+            dismiss(loadingToastId); // Dismiss loading toast
            toast({
              title: 'Unsupported File Type',
              description: `"${file.name}" is not a supported .txt or .epub file.`,
@@ -440,26 +438,25 @@ export default function Home() {
 
          console.log(`File content length: ${fileContent.length}`);
          setText(fileContent);
-         // Improved token splitting: Handles hyphenated words, contractions, and keeps punctuation separate.
-         // Matches sequences of word characters (incl. hyphens, apostrophes) OR single punctuation marks.
-         const newTokens = fileContent.match(/[\p{L}\p{N}'-]+|[.,!?;:]+|\S/gu) || [];
-         console.log(`Extracted ${newTokens.length} tokens.`);
+         // Tokenize by whitespace (including newlines)
+         const newTokens = fileContent.split(/[\s\n]+/).filter(token => token.length > 0);
+         console.log(`Extracted ${newTokens.length} tokens (split by whitespace).`);
          setTokens(newTokens);
 
-         // Count actual words
+         // Count actual words (alphanumeric sequences)
          const wordCount = newTokens.filter(isActualWord).length;
          setActualWordCount(wordCount);
          console.log(`Counted ${wordCount} actual words.`);
 
          // Explicitly dismiss the loading toast *before* showing success/error
-         dismiss(loadingToast.id);
+         dismiss(loadingToastId);
 
 
          if (newTokens.length === 0 && fileContent.length > 0) {
-             console.warn("File loaded, but no tokens extracted. Content might be structured unusually or contain skipped sections.");
+             console.warn("File loaded, but no tokens extracted after splitting. Check content format.");
             toast({
              title: 'Parsing Issue',
-             description: 'File loaded, but few/no words or punctuation were extracted. Check content format or potential errors during parsing.',
+             description: 'File loaded, but no words/elements were extracted after splitting. Check content format or potential errors.',
              variant: 'destructive',
            });
          } else if (newTokens.length === 0) {
@@ -486,12 +483,12 @@ export default function Home() {
       } catch (error: any) {
          console.error('Error during file processing or parsing:', error);
           // Dismiss loading toast first, then show error
-          dismiss(loadingToast.id);
+          dismiss(loadingToastId);
           toast({
            title: 'Error Loading File',
            description: error.message || 'An unexpected error occurred. Check console.',
            variant: 'destructive',
-            duration: 7000, // Longer duration for errors
+            duration: 7000,
          });
          setFileName(null);
          setText('');
@@ -500,112 +497,61 @@ export default function Home() {
       } finally {
         console.log("File upload handling finished.");
         if (event.target) {
-            event.target.value = ''; // Reset input for re-upload
+            event.target.value = '';
         }
       }
     },
-    [parseEpub, toast, dismiss, extractTextRecursive]
+    [parseEpub, toast, dismiss] // remove extractTextRecursive if not directly used here
   );
 
-
-  // Function to find the index of the next token that is punctuation or end of text
+  // Function to find the index of the next punctuation based on the new logic
   const findNextPunctuationIndex = useCallback((startIndex: number): number => {
     for (let i = startIndex; i < tokens.length; i++) {
-      // Match common sentence terminators or clause separators (as separate tokens)
-      if (tokens[i] && /^[.,!?;:]$/.test(tokens[i])) {
-        return i; // Return index of the punctuation token
+      const type = getPunctuationType(tokens[i]);
+      if (type === 'sentence' || type === 'clause') {
+        return i; // Return index of the token ending with punctuation
       }
     }
-    return -1; // Return -1 if no punctuation found before the end
+    return -1; // No punctuation found
   }, [tokens]);
 
 
-   // Memoize the calculation of target chunk size (in words) and delay multiplier
-   const currentChunkSettings = useMemo((): { targetChunkWordCount: number; delayMultiplier: number; isAdjusted: boolean } => {
-     let targetChunkWordCount = Math.max(1, wordsPerChunkTarget); // Start with user setting
-     let delayMultiplier = 1.0; // Base multiplier
-     let localIsAdjustingChunk = false; // Use local variable to avoid direct state update
+   // --- Punctuation and Delay Logic ---
+   const currentChunkPunctuationInfo = useMemo(() => {
+       if (currentIndex >= tokens.length) return { delayMultiplier: 1.0 };
 
-     // Check the *last token of the previous chunk* for punctuation pause
-     if (currentIndex > 0) {
-       const lastTokenOfPreviousChunkIndex = currentIndex - 1;
-       if (lastTokenOfPreviousChunkIndex >= 0 && lastTokenOfPreviousChunkIndex < tokens.length) {
-          const previousToken = tokens[lastTokenOfPreviousChunkIndex];
-          if (previousToken && /^[.?!]$/.test(previousToken)) {
-              // console.log(`Sentence end token detected before index ${currentIndex}: "${previousToken}". Doubling delay.`);
-              delayMultiplier = 2.0; // Double delay for sentence terminators
-          }
-          else if (previousToken && /^[,;:]$/.test(previousToken)) {
-              // console.log(`Clause punctuation token detected before index ${currentIndex}: "${previousToken}". Adding 50% delay.`);
-              delayMultiplier = 1.5; // 50% longer delay for commas, semicolons, colons
-          }
+       // Check the last token of the *previous* chunk (which is currentIndex - 1)
+       const previousTokenIndex = currentIndex - 1;
+       if (previousTokenIndex < 0) return { delayMultiplier: 1.0 }; // No previous token
+
+       const previousToken = tokens[previousTokenIndex];
+       const punctuationType = getPunctuationType(previousToken);
+
+       if (punctuationType === 'sentence') {
+           return { delayMultiplier: 2.0 }; // Double delay after sentence end
        }
-     }
+       if (punctuationType === 'clause') {
+           return { delayMultiplier: 1.5 }; // 50% longer delay after clause end
+       }
 
-     // --- Adaptive Chunk Size Logic ---
-     const nextPunctuationIdx = findNextPunctuationIndex(currentIndex);
-     let wordsUntilPunctuation = Infinity;
-
-     if (nextPunctuationIdx !== -1) {
-         // Count *actual words* from currentIndex up to (but not including) the punctuation
-         wordsUntilPunctuation = 0;
-         for(let i = currentIndex; i < nextPunctuationIdx; i++) {
-            if (isActualWord(tokens[i])) {
-                wordsUntilPunctuation++;
-            }
-         }
-     } else {
-        // Count words until the end if no punctuation
-        wordsUntilPunctuation = 0;
-         for(let i = currentIndex; i < tokens.length; i++) {
-             if (isActualWord(tokens[i])) {
-                 wordsUntilPunctuation++;
-             }
-         }
-     }
+       return { delayMultiplier: 1.0 }; // Default multiplier
+   }, [currentIndex, tokens]);
 
 
-      // Condition: If words until punctuation is at least double the user setting
-      if (wordsUntilPunctuation >= wordsPerChunkTarget * 2) {
-         // console.log(`Punctuation far (${wordsUntilPunctuation} words). Increasing target chunk word count.`);
-         localIsAdjustingChunk = true;
-         // Increase target, capped at 10 words or the available words until punctuation
-         targetChunkWordCount = Math.min(10, wordsUntilPunctuation, Math.max(wordsPerChunkTarget, Math.floor(wordsPerChunkTarget * 1.5)));
-         // Reset multiplier if chunk size is increased? Let's test keeping the multiplier based on previous word.
-         // delayMultiplier = 1.0;
-     } else {
-         // console.log(`Punctuation near (${wordsUntilPunctuation} words) or end of text. Using standard target chunk word count.`);
-         targetChunkWordCount = wordsPerChunkTarget;
-     }
-
-     return { targetChunkWordCount: Math.max(1, targetChunkWordCount), delayMultiplier, isAdjusted: localIsAdjustingChunk };
-
-   }, [wordsPerChunkTarget, currentIndex, findNextPunctuationIndex, tokens]); // Recalculate when these change
-
-
-   // Effect to update the isAdjustingChunk state based on the memoized calculation
-   useEffect(() => {
-     setIsAdjustingChunk(currentChunkSettings.isAdjusted);
-   }, [currentChunkSettings.isAdjusted]);
-
-
-  // Function to advance to the next chunk based on word count
+  // Function to advance to the next chunk based on the *new* findChunkInfo logic
   const advanceChunk = useCallback(() => {
-    // Get target word count from the memoized calculation
-    const { targetChunkWordCount } = currentChunkSettings;
-
-    // Find the end index of the next chunk based on the target word count
-    const { endIndex } = findChunkInfo(currentIndex, targetChunkWordCount, tokens);
+    // Use findChunkInfo to get the end index of the next logical chunk
+    const { endIndex } = findChunkInfo(currentIndex, chunkWordTarget, tokens);
 
     if (endIndex >= tokens.length) {
-        setCurrentIndex(tokens.length); // Go to the very end
+        setCurrentIndex(tokens.length);
         setIsPlaying(false);
         toast({ title: "End of Text", description: "Finished reading." });
         if (timeoutRef.current) clearTimeout(timeoutRef.current);
     } else {
         setCurrentIndex(endIndex); // Move to the start of the next chunk
     }
-  }, [currentIndex, tokens, currentChunkSettings, toast]); // Depend on memoized value and tokens
+  }, [currentIndex, tokens, chunkWordTarget, toast]);
 
 
    // Effect to handle the reading timer using setTimeout for dynamic delays
@@ -616,23 +562,21 @@ export default function Home() {
      }
 
      if (isPlaying && tokens.length > 0 && currentIndex < tokens.length) {
-        // Get target word count and delay multiplier from memoized settings
-        const { targetChunkWordCount, delayMultiplier } = currentChunkSettings;
+        // Get the delay multiplier based on the punctuation of the *previous* chunk
+        const { delayMultiplier } = currentChunkPunctuationInfo;
 
         // Calculate the actual number of words in the *upcoming* chunk
-        const { actualWordsInChunk } = findChunkInfo(currentIndex, targetChunkWordCount, tokens);
+        const { actualWordsInChunk } = findChunkInfo(currentIndex, chunkWordTarget, tokens);
 
         // Calculate base interval per word
         const wordInterval = calculateWordInterval();
 
         // Calculate delay: interval per word * actual words in this chunk * punctuation multiplier
-        // Ensure actualWordsInChunk is at least 1 if the chunk isn't empty to avoid zero delay
-        const effectiveWords = Math.max(1, actualWordsInChunk);
+        const effectiveWords = Math.max(1, actualWordsInChunk); // Ensure at least 1 word contributes to delay
         let currentDelay = wordInterval * effectiveWords * delayMultiplier;
 
-
        // Schedule the next advanceChunk call
-       console.log(`Scheduling next chunk. Target Words: ${targetChunkWordCount}, Actual Words: ${actualWordsInChunk}, Word Interval: ${wordInterval.toFixed(0)}ms, Punctuation Multiplier: ${delayMultiplier.toFixed(2)}, Final Delay: ${currentDelay.toFixed(0)}ms`);
+       console.log(`Scheduling next chunk. Target Words: ${chunkWordTarget}, Actual Words: ${actualWordsInChunk}, Word Interval: ${wordInterval.toFixed(0)}ms, Punctuation Multiplier: ${delayMultiplier.toFixed(2)}, Final Delay: ${currentDelay.toFixed(0)}ms`);
        timeoutRef.current = setTimeout(advanceChunk, Math.max(50, currentDelay)); // Ensure minimum delay
      }
 
@@ -640,21 +584,21 @@ export default function Home() {
      return () => {
        if (timeoutRef.current) {
          clearTimeout(timeoutRef.current);
-         timeoutRef.current = null; // Ensure ref is cleared on cleanup
+         timeoutRef.current = null;
        }
      };
    }, [
        isPlaying,
-       tokens, // Depends on tokens array content
+       tokens,
        currentIndex,
-       advanceChunk, // This is memoized and stable
-       calculateWordInterval, // This is memoized and stable based on wpm
-       currentChunkSettings, // Depend on memoized value
+       advanceChunk,
+       calculateWordInterval,
+       chunkWordTarget, // Depend on the target word count
+       currentChunkPunctuationInfo, // Depend on punctuation info
      ]);
 
 
    useEffect(() => {
-    // Calculate progress based on the number of *actual words* processed so far
     if (actualWordCount > 0) {
         let wordsProcessed = 0;
         for (let i = 0; i < Math.min(currentIndex, tokens.length); i++) {
@@ -667,7 +611,7 @@ export default function Home() {
     } else {
         setProgress(0);
     }
-   }, [currentIndex, tokens, actualWordCount]); // Depend on actualWordCount now
+   }, [currentIndex, tokens, actualWordCount]);
 
 
   const togglePlay = () => {
@@ -679,40 +623,35 @@ export default function Home() {
       });
       return;
     }
-     if (currentIndex >= tokens.length) { // If at the end
+     if (currentIndex >= tokens.length) {
         setCurrentIndex(0);
         setProgress(0);
-        setIsPlaying(true); // Start from beginning
+        setIsPlaying(true);
         toast({title: "Restarting Reading"});
     } else {
          setIsPlaying((prev) => {
              const newState = !prev;
-             // If changing to paused state, clear any pending timeout
              if (!newState && timeoutRef.current) {
                  clearTimeout(timeoutRef.current);
                  timeoutRef.current = null;
              }
-             // The useEffect will handle starting/resuming the timer if newState is true
              return newState;
          });
     }
   };
 
-  // Find the chunk info for the *current* display
-  const { endIndex: currentChunkEndIndex } = findChunkInfo(currentIndex, currentChunkSettings.targetChunkWordCount, tokens);
+  // Find the chunk info for the *current* display using the new logic
+  const { endIndex: currentChunkEndIndex } = findChunkInfo(currentIndex, chunkWordTarget, tokens);
   const currentTokensForDisplay = tokens.slice(currentIndex, currentChunkEndIndex);
 
 
    const calculatePivot = (token: string): number => {
     if (!token) return 0;
-     // Pivot calculation on the raw token (including any trailing punctuation)
-     // Ensure length is at least 1
      const len = Math.max(1, token.length);
-     // Pivot calculation: roughly 1/3rd of the way in, min 0, max len-1
      return Math.max(0, Math.min(Math.floor(len / 3), len - 1));
    };
 
-  // Calculate pivot based *only* on the first token of the current display chunk
+  // Pivot based on the first token of the current display chunk
   const firstTokenPivotIndex = calculatePivot(currentTokensForDisplay[0] || '');
 
 
@@ -722,23 +661,22 @@ export default function Home() {
       <main className="flex-grow flex items-center justify-center overflow-hidden pt-5 pb-20 px-4">
         {tokens.length > 0 ? (
           <ReadingDisplay
-            tokens={currentTokensForDisplay} // Pass the tokens for the current chunk
-            pivotIndex={firstTokenPivotIndex} // Pass the calculated pivot for the first token
-            isAdjusted={isAdjustingChunk} // Pass indicator for visual feedback
+            tokens={currentTokensForDisplay}
+            pivotIndex={firstTokenPivotIndex}
+            isAdjusted={isAdjustingChunk} // Reuse this flag or remove if not needed
            />
         ) : (
           <div className="text-center text-muted-foreground">
             <p>Upload a .txt or .epub file to begin.</p>
             {fileName && <p className="text-sm mt-2">Last attempt: {fileName}</p>}
-             {/* <p className="text-xs mt-4">(Check console for loading errors)</p> */}
           </div>
         )}
       </main>
       <ReaderControls
         wpm={wpm}
         setWpm={setWpm}
-        wordsPerChunkTarget={wordsPerChunkTarget} // Pass target word count
-        setWordsPerChunkTarget={setWordsPerChunkTarget} // Setter for target
+        chunkWordTarget={chunkWordTarget} // Pass target word count
+        setChunkWordTarget={setChunkWordTarget} // Setter for target
         isPlaying={isPlaying}
         togglePlay={togglePlay}
         onFileUpload={handleFileUpload}
@@ -749,7 +687,6 @@ export default function Home() {
 }
 // Potential Future Enhancements:
 // - Navigation (jump back/forward, go to percentage)
-// - More sophisticated punctuation handling (e.g., abbreviations vs. sentence ends)
 // - Remember reading position across sessions (localStorage)
 // - Theme switching (light/dark)
 // - Font customization
