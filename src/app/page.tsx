@@ -2,20 +2,12 @@
 'use client';
 
 import * as React from 'react';
-import { Header } from '@/components/header'; // Import the new Header component
+import { Header } from '@/components/header';
 import { ReaderControls } from '@/components/reader-controls';
 import { ReadingDisplay } from '@/components/reading-display';
 import { Progress } from '@/components/ui/progress';
 import { useReaderState } from '@/hooks/useReaderState';
-import { isActualWord } from '@/lib/readingUtils';
-
-// Helper function to calculate the pivot character index within a token
-const calculatePivot = (token: string): number => {
-    if (!token) return 0;
-    const len = Math.max(1, token.length);
-    return Math.max(0, Math.min(Math.floor(len / 3), len - 1));
-};
-
+import { calculatePivot } from '@/lib/pivotUtils'; // Import pivot calculation
 
 export default function Home() {
     const {
@@ -38,6 +30,7 @@ export default function Home() {
         currentTokensForDisplay,
     } = useReaderState();
 
+    // Calculate pivot index based on the *first token* of the current chunk
     const firstTokenPivotIndex = calculatePivot(currentTokensForDisplay[0] || '');
 
     const canGoPrevious = currentIndex > 0;
@@ -45,18 +38,13 @@ export default function Home() {
 
     return (
         <div className="flex flex-col h-screen bg-background text-foreground">
-             {/* Render Header, passing WPM and Chunk Size props */}
-             <Header
-                wpm={wpm}
-                setWpm={setWpm}
-                chunkWordTarget={chunkWordTarget}
-                setChunkWordTarget={setChunkWordTarget}
-            />
+             {/* Render Header */}
+             <Header />
 
              {/* Progress bar adjusted to be below the header */}
              <Progress
                 value={progress}
-                className="w-full h-2 fixed top-14 left-0 z-10 cursor-pointer" // Positioned below header, lower z-index
+                className="w-full h-2 fixed top-14 left-0 z-10 cursor-pointer" // Positioned below header
                 onClick={(e) => {
                     const progressBar = e.currentTarget;
                     const clickX = e.clientX - progressBar.getBoundingClientRect().left;
@@ -80,12 +68,12 @@ export default function Home() {
                 }}
             />
 
-             {/* Adjust main content padding to account for Header and Controls */}
+             {/* Adjust main content padding */}
              <main className="flex-grow flex items-center justify-center overflow-hidden pt-20 pb-20 px-4"> {/* Increased pt */}
                 {words.length > 0 ? (
                     <ReadingDisplay
                         tokens={currentTokensForDisplay}
-                        pivotIndex={firstTokenPivotIndex}
+                        pivotIndex={firstTokenPivotIndex} // Pass calculated pivot
                         isAdjusted={isChunkSizeAdjusted}
                     />
                 ) : (
@@ -96,12 +84,12 @@ export default function Home() {
                 )}
             </main>
 
-             {/* Render Controls, removing WPM and Chunk Size props */}
+             {/* Render Controls */}
              <ReaderControls
-                // wpm={wpm} // Removed
-                // setWpm={setWpm} // Removed
-                // chunkWordTarget={chunkWordTarget} // Removed
-                // setChunkWordTarget={setChunkWordTarget} // Removed
+                wpm={wpm}
+                setWpm={setWpm}
+                chunkWordTarget={chunkWordTarget}
+                setChunkWordTarget={setChunkWordTarget}
                 isPlaying={isPlaying}
                 togglePlay={togglePlay}
                 onFileUpload={handleFileUpload}
@@ -115,3 +103,14 @@ export default function Home() {
         </div>
     );
 }
+
+// Potential Future Enhancements:
+// - Error handling for file read/parse
+// - More sophisticated text splitting (handling different punctuation, sentence structures)
+// - Highlighting the pivot character more reliably (might require analyzing font metrics)
+// - Remembering reading position per file
+// - Storing user settings (WPM, chunk size) in localStorage
+// - Theme switching (Light/Dark)
+// - Keyboard shortcuts for navigation/play/pause
+// - Support for more file types (PDF, DOCX - might require server-side processing or heavier libraries)
+// - Performance optimization for very large files (e.g., virtualized rendering)

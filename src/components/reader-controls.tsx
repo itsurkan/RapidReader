@@ -8,15 +8,17 @@ import { Slider } from '@/components/ui/slider';
 import { Input } from '@/components/ui/input';
 import { Separator } from '@/components/ui/separator';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
-import { useBackground } from '@/hooks/useBackground';
+import { useBackground, DEFAULT_IMAGES } from '@/hooks/useBackground'; // Import DEFAULT_IMAGES
 import { useToast } from '@/hooks/use-toast';
-import { cn } from '@/lib/utils'; // Import cn function
+import { cn } from '@/lib/utils';
 
 interface ReaderControlsProps {
+  // Added props needed for settings popover content
   wpm: number;
   setWpm: (wpm: number) => void;
   chunkWordTarget: number;
   setChunkWordTarget: (count: number) => void;
+  // Existing props
   isPlaying: boolean;
   togglePlay: () => void;
   onFileUpload: (event: React.ChangeEvent<HTMLInputElement>) => void;
@@ -29,10 +31,12 @@ interface ReaderControlsProps {
 }
 
 export function ReaderControls({
+  // Destructure new props
   wpm,
   setWpm,
   chunkWordTarget,
   setChunkWordTarget,
+  // Existing props
   isPlaying,
   togglePlay,
   onFileUpload,
@@ -45,7 +49,7 @@ export function ReaderControls({
 }: ReaderControlsProps) {
   const fileInputRef = React.useRef<HTMLInputElement>(null);
   const bgImageInputRef = React.useRef<HTMLInputElement>(null);
-  const [settingsOpen, setSettingsOpen] = React.useState(false);
+  const [settingsOpen, setSettingsOpen] = React.useState(false); // State for popover
   const { toast } = useToast();
   const {
     backgroundType,
@@ -53,7 +57,7 @@ export function ReaderControls({
     setBackgroundColor,
     setBackgroundImage,
     setCustomBackground,
-    defaultImages,
+    // defaultImages, // Now imported directly
     isInitialized,
   } = useBackground();
 
@@ -92,20 +96,20 @@ export function ReaderControls({
     }
      if (event.target) {
        event.target.value = ''; // Reset file input
-    }
+     }
   };
 
+  // Determine the current value for the RadioGroup
   const radioValue = isInitialized
     ? backgroundType === 'color'
       ? 'theme-color'
       : backgroundType === 'custom'
-      ? 'custom-image'
-      : backgroundValue // This could be a default image URL or the custom data URL
+      ? 'custom-image' // Use a specific value for custom
+      : backgroundValue // This will be the URL of the selected default image
     : 'theme-color'; // Default before initialization
 
 
-  // Ensure there are no stray characters or syntax errors before the return statement
-  return ( // This corresponds to line 111 in the error message
+  return (
     <div className="fixed bottom-0 left-0 right-0 bg-card p-4 shadow-md border-t flex items-center justify-between z-10"> {/* Lowered z-index */}
       {/* Left Section: Upload and File Name */}
       <div className="flex items-center gap-4 flex-1 min-w-0">
@@ -160,7 +164,7 @@ export function ReaderControls({
         </Button>
       </div>
 
-      {/* Right Section: Settings Popover */}
+      {/* Right Section: Settings Popover - Moved from Header */}
       <div className="flex items-center justify-end flex-1">
          <Popover open={settingsOpen} onOpenChange={setSettingsOpen}>
             <PopoverTrigger asChild>
@@ -168,7 +172,8 @@ export function ReaderControls({
                 <Settings />
               </Button>
             </PopoverTrigger>
-            <PopoverContent className="w-80 max-h-[80vh] overflow-y-auto">
+            {/* Popover Content remains the same, but uses props/state from ReaderControls */}
+             <PopoverContent className="w-80 max-h-[80vh] overflow-y-auto" side="top" align="end">
               <div className="grid gap-4">
                 <div className="space-y-2">
                   <h4 className="font-medium leading-none">Settings</h4>
@@ -181,9 +186,9 @@ export function ReaderControls({
                  <Label className="text-xs text-muted-foreground">Reading</Label>
                 <div className="grid gap-2">
                   <div className="grid grid-cols-3 items-center gap-4">
-                    <Label htmlFor="wpm">WPM</Label>
+                    <Label htmlFor="wpm-slider">WPM</Label> {/* Changed id for uniqueness */}
                     <Slider
-                      id="wpm"
+                      id="wpm-slider"
                       min={50}
                       max={1500}
                       step={10}
@@ -197,9 +202,9 @@ export function ReaderControls({
                 </div>
                 <div className="grid gap-2">
                   <div className="grid grid-cols-3 items-center gap-4">
-                    <Label htmlFor="words-chunk">Words</Label>
+                    <Label htmlFor="words-chunk-slider">Words</Label> {/* Changed id */}
                      <Slider
-                      id="words-chunk"
+                      id="words-chunk-slider"
                       min={1}
                       max={10}
                       step={1}
@@ -219,46 +224,43 @@ export function ReaderControls({
                       <RadioGroup
                          value={radioValue}
                          onValueChange={(value) => {
-                            console.log('value', value)
+                            // console.log('BG Value changed:', value)
                            if (value === 'theme-color') {
                              setBackgroundColor();
-                             setSettingsOpen(false); // Close popover on selection
+                             setSettingsOpen(false);
                            } else if (value === 'custom-image') {
-                               // When selecting 'custom', trigger the file input
                                handleBgImageUploadClick();
-                               // Don't close popover here, let the upload handler do it
                            } else {
-                             // This handles selecting a default image
                              setBackgroundImage(value);
-                             setSettingsOpen(false); // Close popover on selection
+                             setSettingsOpen(false);
                            }
                          }}
                          className="grid grid-cols-3 gap-2"
                        >
                          <Label
-                           htmlFor="bg-theme-color"
+                           htmlFor="bg-theme-color-controls" // Unique ID
                            className={cn(
                              "cursor-pointer rounded-md border p-2 hover:bg-accent hover:text-accent-foreground",
                              radioValue === 'theme-color' && "bg-accent text-accent-foreground"
                            )}
                          >
-                            <RadioGroupItem value="theme-color" id="bg-theme-color" className="sr-only" />
+                            <RadioGroupItem value="theme-color" id="bg-theme-color-controls" className="sr-only" />
                             <div className="flex flex-col items-center gap-1">
                               <Palette className="w-5 h-5" />
                               <span className="text-xs">Theme</span>
                             </div>
                          </Label>
-                         {Object.entries(defaultImages).map(([key, url]) => (
+                         {Object.entries(DEFAULT_IMAGES).map(([key, { url, hint }]) => ( // Use imported DEFAULT_IMAGES
                            <Label
                              key={key}
-                             htmlFor={`bg-${key}`}
+                             htmlFor={`bg-${key}-controls`} // Unique ID
                              className={cn(
                                "relative cursor-pointer rounded-md border p-2 hover:border-accent [&:has(:checked)]:border-accent",
                                 radioValue === url && "border-accent"
                              )}
-                             data-ai-hint="abstract landscape nature" // Added hint for AI image search
+                             data-ai-hint={hint} // Add hint
                            >
-                             <RadioGroupItem value={url} id={`bg-${key}`} className="sr-only" />
+                             <RadioGroupItem value={url} id={`bg-${key}-controls`} className="sr-only" />
                              <img
                                src={url}
                                alt={`Default Background ${key.replace('default', '')}`}
@@ -271,21 +273,19 @@ export function ReaderControls({
                            </Label>
                          ))}
                           <Label
-                             htmlFor="bg-custom-image"
+                             htmlFor="bg-custom-image-controls" // Unique ID
                              className={cn(
                                "cursor-pointer rounded-md border p-2 hover:bg-accent hover:text-accent-foreground",
                                 radioValue === 'custom-image' && "bg-accent text-accent-foreground"
                              )}
-                              // Prevent default radio change behavior if already custom, just trigger upload
                              onClick={(e) => {
                                 if (radioValue === 'custom-image') {
-                                    e.preventDefault(); // Prevent re-selecting the radio
-                                    handleBgImageUploadClick(); // Trigger file input again
+                                    e.preventDefault();
+                                    handleBgImageUploadClick();
                                 }
                               }}
                            >
-                            {/* This RadioGroupItem is primarily for state management and styling */}
-                            <RadioGroupItem value="custom-image" id="bg-custom-image" className="sr-only" />
+                            <RadioGroupItem value="custom-image" id="bg-custom-image-controls" className="sr-only" />
                             <div className="flex flex-col items-center gap-1">
                               <ImageIcon className="w-5 h-5" />
                               <span className="text-xs">Custom</span>
