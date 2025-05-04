@@ -148,7 +148,7 @@ async function loadAndParseSection(item: SpineItem, state: EpubProcessingState):
  * @returns Promise that resolves when all sections are processed.
  */
 export async function processSpineItems(state: EpubProcessingState): Promise<void> {
-    if (!state.book?.spine?.items) {
+    if (!state.book?.spine.hooks.content) {
         console.warn("[WARN] Book spine or spine items not available for processing.");
         state.totalSections = 0;
         return; // Nothing to process
