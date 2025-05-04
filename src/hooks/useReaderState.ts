@@ -1,7 +1,7 @@
 
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { useToast } from '@/hooks/use-toast';
-import { isActualWord } from '@/lib/readingUtils'; // Use alias path
+import { isActualWord, calculatePivot } from '@/lib/readingUtils'; // Import isActualWord from readingUtils
 import { getPunctuationType } from '@/lib/punctuationUtils'; // Assuming this file exists and is correct
 import { findChunkInfo } from '@/lib/chunkingLogic';
 import { findPreviousChunkStart, findChunkStartForWordIndex } from '@/lib/chunkNavigation';
@@ -51,7 +51,7 @@ export function useReaderState() {
     const punctuationType = getPunctuationType(previousToken);
 
     if (punctuationType === 'sentence' || punctuationType === 'clause') {
-      return { delayMultiplier: 3.0 }; // Triple delay after sentence/clause ends
+      return { delayMultiplier: 2.0 }; // Reduced pause multiplier to 2.0 (was 3.0)
     }
     return { delayMultiplier: 1.0 };
   }, [currentIndex, words]);
@@ -312,3 +312,4 @@ export function useReaderState() {
     canGoPrevious, // Expose navigation states
   };
 }
+
