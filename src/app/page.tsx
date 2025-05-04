@@ -540,7 +540,7 @@ export default function Home() {
       setIsAdjustingChunk(false);
 
       // Get dismiss function and ID *before* potential async operations
-      const { dismiss: dismissLoadingToast, id: loadingToastId } = toast({ title: 'Loading File...', description: `Processing ${file.name}` });
+      const loadingToast = toast({ title: 'Loading File...', description: `Processing ${file.name}` });
 
       try {
          let fileContent = '';
@@ -573,7 +573,7 @@ export default function Home() {
              console.log("parseEpub completed.");
          } else if (lowerCaseName.endsWith('.mobi')) {
             console.warn("Unsupported file type: .mobi");
-            dismissLoadingToast(); // Dismiss loading toast
+            loadingToast.dismiss(); // Dismiss loading toast
             toast({
              title: 'Unsupported Format',
              description: '.mobi files are not currently supported. Please try .txt or .epub.',
@@ -583,7 +583,7 @@ export default function Home() {
            return;
          } else {
             console.warn(`Unsupported file type: ${file.type} / ${file.name}`);
-            dismissLoadingToast(); // Dismiss loading toast
+            loadingToast.dismiss(); // Dismiss loading toast
            toast({
              title: 'Unsupported File Type',
              description: `"${file.name}" is not a supported .txt or .epub file.`,
@@ -606,7 +606,7 @@ export default function Home() {
          console.log(`Counted ${wordCount} actual words.`);
 
          // Explicitly dismiss the loading toast *before* showing success/error
-         dismissLoadingToast(); // Use the function obtained earlier
+          loadingToast.dismiss(); // Use the function obtained earlier
 
 
          if (newTokens.length === 0 && fileContent.length > 0) {
@@ -640,7 +640,7 @@ export default function Home() {
       } catch (error: any) {
          console.error('Error during file processing or parsing:', error);
           // Dismiss loading toast first, then show error
-          dismissLoadingToast(); // Use the function obtained earlier
+          loadingToast.dismiss(); // Use the function obtained earlier
           toast({
            title: 'Error Loading File',
            description: error.message || 'An unexpected error occurred. Check console.',
@@ -658,7 +658,7 @@ export default function Home() {
         }
       }
     },
-    [parseEpub, toast] // No dismiss dependency needed here
+    [parseEpub, toast, dismiss] // Add dismiss here
   );
 
 
@@ -675,8 +675,8 @@ export default function Home() {
 
         // Apply delay multiplier based on the punctuation at the end of the PREVIOUS chunk
        if (punctuationType === 'sentence' || punctuationType === 'clause') {
-           console.log(`Applying x2 delay multiplier for ${punctuationType} end.`);
-           return { delayMultiplier: 2.0 }; // Double delay after ., !, ?, ,, ;, :
+           console.log(`Applying x3 delay multiplier for ${punctuationType} end.`);
+           return { delayMultiplier: 3.0 }; // Triple delay after ., !, ?, ,, ;, :
        }
 
        return { delayMultiplier: 1.0 }; // Default multiplier
@@ -850,3 +850,14 @@ export default function Home() {
     </div>
   );
 }
+
+// Potential Future Enhancements:
+// - Loading indicator during file processing/parsing
+// - More sophisticated punctuation handling (e.g., different delays for different types)
+// - User settings persistence (localStorage)
+// - Bookmark/Save progress feature
+// - Theme toggle (light/dark)
+// - More robust error handling (e.g., for corrupted files)
+// - Smoother text display transitions (e.g., fade in/out)
+// - Keyboard shortcuts for controls (play/pause, next/prev chunk, settings)
+// - Support for more file types (PDF, DOCX - might require server-side processing or heavier libraries)
