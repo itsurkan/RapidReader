@@ -1,14 +1,10 @@
 
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { useToast } from '@/hooks/use-toast';
-import {
-    isActualWord,
-    getPunctuationType,
-    findChunkInfo,
-    findPreviousChunkStart,
-    findChunkStartForWordIndex
-} from '@/lib/readingUtils';
-import { parseEpub } from '@/lib/epubParser';
+import { isActualWord, getPunctuationType } from '@/lib/readingUtils';
+import { findChunkInfo } from '@/lib/chunkingLogic';
+import { findPreviousChunkStart, findChunkStartForWordIndex } from '@/lib/chunkNavigation';
+import { parseEpub } from '@/lib/epubParser'; // Assuming epubParser is correctly typed
 
 interface ToastController {
   id: string;
@@ -51,7 +47,7 @@ export function useReaderState() {
 
   const advanceChunk = useCallback(() => {
     const { endIndex, isAdjusted } = findChunkInfo(currentIndex, chunkWordTarget, words);
-    setIsChunkSizeAdjusted(isAdjusted);
+    setIsChunkSizeAdjusted(isAdjusted); // Update adjustment state
 
     if (endIndex >= words.length) {
       setCurrentIndex(words.length);
@@ -61,7 +57,7 @@ export function useReaderState() {
     } else {
       setCurrentIndex(endIndex);
     }
-  }, [currentIndex, words, chunkWordTarget, toast]);
+  }, [currentIndex, words, chunkWordTarget, toast]); // Removed setIsChunkSizeAdjusted from deps
 
   useEffect(() => {
     if (timeoutRef.current) clearTimeout(timeoutRef.current);
@@ -69,17 +65,19 @@ export function useReaderState() {
     if (isPlaying && words.length > 0 && currentIndex < words.length) {
       const { delayMultiplier } = currentChunkPunctuationInfo;
       const { actualWordsInChunk, isAdjusted } = findChunkInfo(currentIndex, chunkWordTarget, words);
+      // Set isAdjusted state based on the *current* chunk's calculation before setting the timer
       setIsChunkSizeAdjusted(isAdjusted);
 
       const wordInterval = calculateWordInterval();
-      const effectiveWords = Math.max(1, actualWordsInChunk);
+      const effectiveWords = Math.max(1, actualWordsInChunk); // Use actual words in the *current* chunk
       const currentDelay = wordInterval * effectiveWords * delayMultiplier;
 
       timeoutRef.current = setTimeout(advanceChunk, Math.max(50, currentDelay));
     }
 
     return () => { if (timeoutRef.current) clearTimeout(timeoutRef.current); };
-  }, [isPlaying, words, currentIndex, advanceChunk, calculateWordInterval, chunkWordTarget, currentChunkPunctuationInfo]);
+  }, [isPlaying, words, currentIndex, advanceChunk, calculateWordInterval, chunkWordTarget, currentChunkPunctuationInfo]); // Keep setIsChunkSizeAdjusted here or rely on advanceChunk? Rely on advanceChunk for next state, effect for current visual state
+
 
   // --- Progress Update ---
 
@@ -115,8 +113,13 @@ export function useReaderState() {
       setWords([]);
       setActualWordCount(0);
 
-      toastCtrlRef.current = toast({ title: 'Loading File...', description: `Processing ${file.name}` });
-      const loadingToastId = toastCtrlRef.current?.id;
+      // Use dismiss directly from useToast
+       if (toastCtrlRef.current) {
+         dismiss(toastCtrlRef.current.id);
+         toastCtrlRef.current = null;
+       }
+       toastCtrlRef.current = toast({ title: 'Loading File...', description: `Processing ${file.name}` });
+       const loadingToastId = toastCtrlRef.current?.id; // Store ID locally
 
       try {
         let fileContent = '';
@@ -132,7 +135,8 @@ export function useReaderState() {
           });
         } else if (lowerCaseName.endsWith('.epub') || file.type === 'application/epub+zip') {
           console.log("Parsing EPUB file...");
-          fileContent = await parseEpub(file, toast, dismiss); // Pass toast and dismiss
+          // Pass toast and dismiss functions correctly
+          fileContent = await parseEpub(file, toast, dismiss);
         } else if (lowerCaseName.endsWith('.mobi')) {
            throw new Error(".mobi files are not supported. Please use .txt or .epub.");
         } else {
@@ -148,10 +152,15 @@ export function useReaderState() {
         setActualWordCount(wordCount);
         console.log(`Counted ${wordCount} actual words.`);
 
-        if (loadingToastId && toastCtrlRef.current?.id === loadingToastId) {
-          dismiss(loadingToastId);
-          toastCtrlRef.current = null;
-        }
+         // Explicitly dismiss the loading toast *before* showing success/error
+         if (loadingToastId) {
+            dismiss(loadingToastId);
+            // Ensure ref is cleared if this specific toast was dismissed
+            if (toastCtrlRef.current?.id === loadingToastId) {
+                 toastCtrlRef.current = null;
+            }
+         }
+
 
         if (newWords.length === 0 && fileContent.length > 0) {
             throw new Error("File loaded, but no tokens extracted. Check content format.");
@@ -164,20 +173,24 @@ export function useReaderState() {
         }
       } catch (error: any) {
         console.error('Error loading file:', error);
-        if (loadingToastId && toastCtrlRef.current?.id === loadingToastId) {
-           dismiss(loadingToastId);
-           toastCtrlRef.current = null;
-        }
+         // Ensure loading toast is dismissed on error too
+         if (loadingToastId) {
+            dismiss(loadingToastId);
+            if (toastCtrlRef.current?.id === loadingToastId) {
+                toastCtrlRef.current = null;
+            }
+         }
         toast({ title: 'Error Loading File', description: error.message || 'Unknown error.', variant: 'destructive', duration: 7000 });
         setFileName(null); setText(''); setWords([]); setActualWordCount(0);
       } finally {
         if (event.target) event.target.value = ''; // Clear file input
-        if (toastCtrlRef.current?.id === loadingToastId) {
+         // Final check to clear ref if it still matches the loading toast
+         if (loadingToastId && toastCtrlRef.current?.id === loadingToastId) {
             toastCtrlRef.current = null;
-        }
+         }
       }
     },
-    [parseEpub, toast, dismiss]
+    [parseEpub, toast, dismiss] // Include dismiss in dependency array
   );
 
   // --- Control Actions ---
@@ -205,6 +218,7 @@ export function useReaderState() {
 
   const goToPreviousChunk = useCallback(() => {
     if (isPlaying) setIsPlaying(false);
+    // Use imported navigation function
     const previousStartIndex = findPreviousChunkStart(currentIndex, chunkWordTarget, words);
     setCurrentIndex(previousStartIndex);
   }, [currentIndex, chunkWordTarget, words, isPlaying]);
@@ -219,8 +233,9 @@ export function useReaderState() {
   const handleProgressClick = useCallback((clickPercentage: number) => {
     if (actualWordCount === 0 || words.length === 0) return;
     setIsPlaying(false);
-    const targetWordIndex = Math.max(1, Math.ceil(actualWordCount * clickPercentage));
-    const targetChunkStartIndex = findChunkStartForWordIndex(targetWordIndex, chunkWordTarget, words);
+    const targetWordNum = Math.max(1, Math.ceil(actualWordCount * clickPercentage)); // Target *word number* (1-based)
+    // Use imported navigation function
+    const targetChunkStartIndex = findChunkStartForWordIndex(targetWordNum, chunkWordTarget, words);
     setCurrentIndex(targetChunkStartIndex);
   }, [actualWordCount, words, chunkWordTarget]);
 
@@ -236,6 +251,7 @@ export function useReaderState() {
     [words, currentIndex, currentChunkEndIndex]
   );
 
+  // Return state and handlers
   return {
     words,
     actualWordCount,
@@ -247,7 +263,7 @@ export function useReaderState() {
     isPlaying,
     fileName,
     progress,
-    isChunkSizeAdjusted,
+    isChunkSizeAdjusted, // Expose this state
     togglePlay,
     handleFileUpload,
     goToNextChunk,
