@@ -1,250 +1,182 @@
 
-import { isActualWord, getPunctuationType, STICKY_WORDS } from './readingUtils';
+import { isActualWord, getPunctuationType } from './readingUtils';
 
 interface ChunkInfo {
-    endIndex: number;
+    endIndex: number; // Index *after* the last token in the chunk
     actualWordsInChunk: number;
-    isAdjusted: boolean;
+    isAdjusted: boolean; // Indicates if overflow/secondary splitting was used
 }
 
-interface ChunkState {
-    wordsInCurrentChunk: number;
-    currentIndex: number;
-    punctuationFound: 'sentence' | 'clause' | 'none';
-    wordsSinceLastPunctuation: number;
-    isAdjusted: boolean;
-    currentTargetWordCount: number;
-}
-
-// Helper to calculate the adaptive target word count
-const calculateCurrentTargetWordCount = (
-    targetWordCount: number,
-    wordsSinceLastPunctuation: number,
-    punctuationFound: 'sentence' | 'clause' | 'none',
-    maxWordExtension: number
-): { currentTarget: number; isAdjusted: boolean } => {
-    let currentTarget = targetWordCount;
-    let isAdjusted = false;
-    // Adjust target *up* if 2*target words seen without significant punctuation
-    if (wordsSinceLastPunctuation >= targetWordCount * 2 && punctuationFound !== 'sentence' && punctuationFound !== 'clause') {
-        currentTarget = Math.min(targetWordCount + maxWordExtension, targetWordCount * 2); // Cap at target + maxExtension or double
-        isAdjusted = true;
-    }
-    return { currentTarget, isAdjusted };
-};
-
-// Helper to backtrack if chunk exceeds maximum extension
-const backtrackIfExceeded = (
-    state: ChunkState,
+/**
+ * Finds the index of the next sentence-ending punctuation mark.
+ * @param startIndex - The index in allTokens to start searching from.
+ * @param allTokens - The array of all tokens.
+ * @returns Object containing the index of the sentence-ending token and the word count, or { index: -1, wordCount: -1 } if not found.
+ */
+const findNextSentenceEnd = (
     startIndex: number,
-    targetWordCount: number,
-    maxWordExtension: number,
     allTokens: string[]
-): ChunkState => {
-    const maxAllowedWords = targetWordCount + maxWordExtension;
-    if (state.wordsInCurrentChunk <= maxAllowedWords) {
-        return state; // No backtracking needed
-    }
-
-    let backtrackIndex = state.currentIndex;
-    let backtrackWords = state.wordsInCurrentChunk;
-    while (backtrackWords > maxAllowedWords && backtrackIndex > startIndex) {
-        backtrackIndex--;
-        if (isActualWord(allTokens[backtrackIndex])) {
-            backtrackWords--;
+): { index: number; wordCount: number } => {
+    let wordCount = 0;
+    for (let i = startIndex; i < allTokens.length; i++) {
+        const token = allTokens[i];
+        if (isActualWord(token)) {
+            wordCount++;
+        }
+        if (getPunctuationType(token) === 'sentence') {
+            return { index: i, wordCount };
         }
     }
-    // console.log(`Chunk exceeded max extension (${maxAllowedWords}). Backtracking from ${state.currentIndex} to ${backtrackIndex + 1}`);
+    return { index: -1, wordCount: -1 };
+};
+
+/**
+ * Finds a suitable split point when a sentence is too long or not found.
+ * Aims for targetWordCount, allows up to maxWordOverflow, prefers splitting after punctuation.
+ * @param startIndex - The index in allTokens to start searching from.
+ * @param targetWordCount - The ideal number of words per chunk.
+ * @param maxWordOverflow - The maximum number of words allowed beyond the target.
+ * @param allTokens - The array of all tokens.
+ * @returns ChunkInfo object for the determined chunk.
+ */
+const findSecondarySplitPoint = (
+    startIndex: number,
+    targetWordCount: number,
+    maxWordOverflow: number,
+    allTokens: string[]
+): ChunkInfo => {
+    let actualWordsCounted = 0;
+    let currentIndex = startIndex;
+    let lastPunctuationBreakPoint = -1; // Index *after* the punctuation token
+    const maxWordsAllowed = targetWordCount + maxWordOverflow;
+
+    while (currentIndex < allTokens.length) {
+        const token = allTokens[currentIndex];
+        const isWord = isActualWord(token);
+
+        if (isWord) {
+            actualWordsCounted++;
+        }
+
+        // Stop if we exceed the maximum allowed words for this secondary split
+        if (actualWordsCounted > maxWordsAllowed) {
+            break; // Stop *before* including the token that exceeded the limit
+        }
+
+        // Record the potential break point *after* sentence or clause punctuation
+        const puncType = getPunctuationType(token);
+        if (puncType === 'sentence' || puncType === 'clause') {
+            lastPunctuationBreakPoint = currentIndex + 1;
+        }
+
+        currentIndex++; // Move to the next token for the next iteration
+
+         // Special case: If we just hit the *exact* max allowed words, stop scanning
+         // (unless the current token was punctuation, allowing the breakpoint update above)
+         if (actualWordsCounted === maxWordsAllowed && puncType === 'none') {
+             break;
+         }
+
+    }
+
+    // Determine the final end index
+    let finalEndIndex = currentIndex; // Default to where the scan stopped
+
+    // Prefer the last punctuation break point if it's valid and within the scanned range
+    if (lastPunctuationBreakPoint > startIndex && lastPunctuationBreakPoint <= currentIndex) {
+        finalEndIndex = lastPunctuationBreakPoint;
+        // Recalculate actual words for the punctuation-based split
+        actualWordsCounted = 0;
+        for (let i = startIndex; i < finalEndIndex; i++) {
+            if (isActualWord(allTokens[i])) {
+                actualWordsCounted++;
+            }
+        }
+        // console.log(`Secondary split: Using punctuation break at ${finalEndIndex}, words: ${actualWordsCounted}`);
+    } else {
+       // If no punctuation break used, the word count is what we tracked in the loop up to `currentIndex`.
+       // If the loop broke because `actualWordsCounted > maxWordsAllowed`, we need the count *at* `currentIndex`.
+       if(finalEndIndex > startIndex) {
+            let countAtEnd = 0;
+             for (let i = startIndex; i < finalEndIndex; i++) {
+                 if (isActualWord(allTokens[i])) {
+                     countAtEnd++;
+                 }
+             }
+             actualWordsCounted = countAtEnd;
+       } else {
+          actualWordsCounted = 0;
+       }
+        // console.log(`Secondary split: Using word limit break at ${finalEndIndex}, words: ${actualWordsCounted}`);
+    }
+
+
+    // Ensure at least one token is included if possible and not at end
+    if (finalEndIndex === startIndex && startIndex < allTokens.length) {
+         finalEndIndex = startIndex + 1;
+         if (isActualWord(allTokens[startIndex])) {
+             actualWordsCounted = 1;
+         } else {
+            actualWordsCounted = 0;
+         }
+    }
+
+
     return {
-        ...state,
-        currentIndex: backtrackIndex, // Point to the token *at* the end of the backtracked chunk
-        wordsInCurrentChunk: backtrackWords,
+        endIndex: finalEndIndex,
+        actualWordsInChunk: actualWordsCounted,
+        isAdjusted: true, // Secondary split always means adjustment from sentence rule
     };
 };
 
-// Helper for lookahead logic
-const handleLookahead = (
-    state: ChunkState,
-    startIndex: number,
-    targetWordCount: number,
-    maxWordExtension: number,
-    allTokens: string[]
-): { extendedIndex: number; extendedWords: number } | null => {
-    const maxAllowedWords = targetWordCount + maxWordExtension;
-    if (state.punctuationFound === 'sentence' || state.wordsInCurrentChunk > maxAllowedWords) {
-        return null; // Don't lookahead if ending on sentence or already exceeded max
-    }
-
-    let lookaheadIndex = state.currentIndex + 1;
-    let lookaheadWords = 0;
-    let firstPunctuationIndex = -1;
-    let wordsAtFirstPunctuation = -1;
-
-    while (lookaheadIndex < allTokens.length) {
-        const nextToken = allTokens[lookaheadIndex];
-        if (isActualWord(nextToken)) {
-            lookaheadWords++;
-        }
-
-        // Stop looking if we exceed the max allowed extension *words* beyond the original target
-        if (state.wordsInCurrentChunk + lookaheadWords > maxAllowedWords) {
-            break;
-        }
-
-        const lookaheadPunctuationType = getPunctuationType(nextToken);
-        const lookaheadClauseBreakSensitivity = Math.max(1, Math.ceil(state.currentTargetWordCount / 2));
-        if (lookaheadPunctuationType === 'sentence' || (lookaheadPunctuationType === 'clause' && (state.wordsSinceLastPunctuation + lookaheadWords) >= lookaheadClauseBreakSensitivity)) {
-            firstPunctuationIndex = lookaheadIndex;
-            wordsAtFirstPunctuation = state.wordsInCurrentChunk + lookaheadWords;
-            break; // Found the first significant punctuation within allowed extension
-        }
-
-        lookaheadIndex++;
-    }
-
-    // If we found punctuation within the allowed extension range
-    if (firstPunctuationIndex !== -1) {
-        return {
-            extendedIndex: firstPunctuationIndex + 1, // Extend chunk to point *after* punctuation
-            extendedWords: wordsAtFirstPunctuation,
-        };
-    }
-
-    return null; // No suitable punctuation found within range
-};
-
-// Helper to apply sticky word adjustment
-const applyStickyWordAdjustment = (endIndex: number, startIndex: number, allTokens: string[]): number => {
-    if (endIndex > startIndex && endIndex < allTokens.length) {
-        const lastTokenIndex = endIndex - 1;
-        const lastToken = allTokens[lastTokenIndex]?.toLowerCase().replace(/[.,!?;:]$/, ''); // Clean last token, add safety check
-        const nextToken = allTokens[endIndex]; // Get the token immediately after the potential end
-
-        if (lastToken && STICKY_WORDS.has(lastToken) && isActualWord(nextToken)) {
-            // If the last token is a sticky word and the next token is an actual word,
-            // try to reduce the chunk size by one token (backtrack)
-            if (endIndex > startIndex + 1) { // Ensure we don't backtrack past the start
-                // console.log(`Adjusted chunk end: Avoided splitting "${lastToken}" from next word.`);
-                return endIndex - 1; // Backtrack one token
-            }
-            // If backtracking isn't possible (chunk would be too small/empty), we let it split.
-        }
-    }
-    return endIndex; // No adjustment needed
-};
-
-// Helper to calculate final chunk details
-const calculateFinalChunk = (
-    startIndex: number,
-    endIndex: number,
-    isAdjusted: boolean,
-    allTokens: string[]
-): ChunkInfo => {
-    // Ensure at least one token is always included if possible and not at end
-    const finalEndIndex = (endIndex === startIndex && startIndex < allTokens.length) ? startIndex + 1 : endIndex;
-
-    // Recalculate actual words for the *final* chunk
-    let finalActualWordsCount = 0;
-    for (let i = startIndex; i < finalEndIndex; i++) {
-        if (isActualWord(allTokens[i])) {
-            finalActualWordsCount++;
-        }
-    }
-
-    return { endIndex: finalEndIndex, actualWordsInChunk: finalActualWordsCount, isAdjusted };
-};
-
-// Main Refactored Function
+/**
+ * Main function to determine the next chunk of tokens for reading.
+ * Prioritizes splitting after sentences, but falls back to a secondary
+ * mechanism if sentences are too long or not found, respecting a maximum overflow.
+ *
+ * @param startIndex - The starting index in the `allTokens` array.
+ * @param targetWordCount - The ideal number of actual words desired in the chunk.
+ * @param allTokens - The array of all tokens (words and punctuation).
+ * @param maxWordOverflow - The maximum number of *additional* actual words allowed beyond `targetWordCount`. Defaults to 3.
+ * @returns {ChunkInfo} An object containing the `endIndex` (index *after* the last token of the chunk),
+ *          `actualWordsInChunk`, and `isAdjusted` flag.
+ */
 export const findChunkInfo = (
     startIndex: number,
     targetWordCount: number,
     allTokens: string[],
-    maxWordExtension: number = 3
+    maxWordOverflow: number = 3 // Default overflow limit
 ): ChunkInfo => {
     if (startIndex >= allTokens.length) {
         return { endIndex: startIndex, actualWordsInChunk: 0, isAdjusted: false };
     }
 
-    let state: ChunkState = {
-        wordsInCurrentChunk: 0,
-        currentIndex: startIndex,
-        punctuationFound: 'none',
-        wordsSinceLastPunctuation: 0,
-        isAdjusted: false,
-        currentTargetWordCount: targetWordCount,
-    };
+    const { index: sentenceEndIndex, wordCount: sentenceChunkWordCount } = findNextSentenceEnd(startIndex, allTokens);
 
-    while (state.currentIndex < allTokens.length) {
-        const token = allTokens[state.currentIndex];
-        const isWord = isActualWord(token);
+    // Case 1: Sentence end found
+    if (sentenceEndIndex !== -1) {
+        const maxWordsAllowed = targetWordCount + maxWordOverflow;
 
-        if (isWord) {
-            state.wordsInCurrentChunk++;
-            state.wordsSinceLastPunctuation++;
+        // Case 1a: The sentence fits within the allowed limit (target + overflow)
+        if (sentenceChunkWordCount <= maxWordsAllowed) {
+             // Check if the word count is exactly the target or less, or if it's an overflow adjustment
+             const adjusted = sentenceChunkWordCount > targetWordCount;
+             // console.log(`Chunking: Found sentence end at ${sentenceEndIndex}. Fits limit (${sentenceChunkWordCount} <= ${maxWordsAllowed}). Adjusted: ${adjusted}`);
+            return {
+                endIndex: sentenceEndIndex + 1, // End *after* the punctuation
+                actualWordsInChunk: sentenceChunkWordCount,
+                isAdjusted: adjusted,
+            };
         }
-        state.punctuationFound = getPunctuationType(token);
-
-        // Calculate adaptive target size
-        const { currentTarget, isAdjusted: wasAdjusted } = calculateCurrentTargetWordCount(
-            targetWordCount,
-            state.wordsSinceLastPunctuation,
-            state.punctuationFound,
-            maxWordExtension
-        );
-        state.currentTargetWordCount = currentTarget;
-        // Only update isAdjusted if it becomes true, or reset it if punctuation breaks the run
-        if (wasAdjusted) {
-            state.isAdjusted = true;
-        } else if (state.punctuationFound === 'sentence' || state.punctuationFound === 'clause') {
-            state.isAdjusted = false; // Reset adjustment if punctuation is hit
-        }
-        // else: keep isAdjusted true if it was already set
-
-        // Check if we have reached the *current* target word count or more
-        if (state.wordsInCurrentChunk >= state.currentTargetWordCount) {
-            // Backtrack first if we've exceeded the absolute max extension
-            state = backtrackIfExceeded(state, startIndex, targetWordCount, maxWordExtension, allTokens);
-            // Break immediately after backtracking if we did backtrack (to avoid further extension)
-             if (state.wordsInCurrentChunk <= targetWordCount + maxWordExtension && state.currentIndex < startIndex + state.wordsInCurrentChunk ) {
-                // we backtracked, break the loop
-                 break;
-             }
-
-
-            // Check if current token ends the chunk based on punctuation
-             const clauseBreakSensitivity = Math.max(1, Math.ceil(state.currentTargetWordCount / 2));
-             if (state.punctuationFound === 'sentence' || (state.punctuationFound === 'clause' && state.wordsSinceLastPunctuation >= clauseBreakSensitivity)) {
-                 state.currentIndex++; // Increment to include the punctuation
-                 break;
-             }
-
-
-            // Try lookahead if conditions are met
-            const lookaheadResult = handleLookahead(state, startIndex, targetWordCount, maxWordExtension, allTokens);
-            if (lookaheadResult) {
-                state.currentIndex = lookaheadResult.extendedIndex;
-                state.wordsInCurrentChunk = lookaheadResult.extendedWords;
-                break; // Break after successful lookahead extension
-            }
-            // If no punctuation break and no lookahead extension, the loop continues
-        }
-
-        // Move to the next token if not breaking
-        state.currentIndex++;
-
-        // Reset wordsSinceLastPunctuation if needed *after* checking conditions
-        if (state.punctuationFound === 'sentence' || state.punctuationFound === 'clause') {
-            state.wordsSinceLastPunctuation = 0;
-            // isAdjusted reset is handled earlier
+        // Case 1b: The sentence is too long, use secondary splitting
+        else {
+             // console.log(`Chunking: Found sentence end at ${sentenceEndIndex}, but too long (${sentenceChunkWordCount} > ${maxWordsAllowed}). Using secondary split.`);
+            return findSecondarySplitPoint(startIndex, targetWordCount, maxWordOverflow, allTokens);
         }
     }
-
-    // Ensure endIndex doesn't exceed bounds
-    let finalEndIndex = Math.min(state.currentIndex, allTokens.length);
-
-    // Apply sticky word adjustment
-    finalEndIndex = applyStickyWordAdjustment(finalEndIndex, startIndex, allTokens);
-
-    // Calculate final details
-    return calculateFinalChunk(startIndex, finalEndIndex, state.isAdjusted, allTokens);
+    // Case 2: No sentence end found until the end of the text
+    else {
+        // console.log(`Chunking: No sentence end found from ${startIndex}. Using secondary split.`);
+        return findSecondarySplitPoint(startIndex, targetWordCount, maxWordOverflow, allTokens);
+    }
 };

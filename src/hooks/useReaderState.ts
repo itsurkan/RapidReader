@@ -22,7 +22,7 @@ export function useReaderState() {
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
   const [fileName, setFileName] = useState<string | null>(null);
   const [progress, setProgress] = useState<number>(0);
-  const [isChunkSizeAdjusted, setIsChunkSizeAdjusted] = useState<boolean>(false);
+  const [isChunkSizeAdjusted, setIsChunkSizeAdjusted] = useState<boolean>(false); // Reflects if the *current* chunk used overflow logic
 
   const timeoutRef = useRef<NodeJS.Timeout | null>(null);
   const toastCtrlRef = useRef<ToastController | null>(null);
@@ -35,19 +35,32 @@ export function useReaderState() {
     return (60 / effectiveWpm) * 1000;
   }, [wpm]);
 
+  // Determine delay multiplier based on punctuation *before* the current chunk
   const currentChunkPunctuationInfo = useMemo(() => {
-    if (currentIndex >= words.length || currentIndex <= 0) return { delayMultiplier: 1.0 };
-    const previousToken = words[currentIndex - 1];
+    if (currentIndex <= 0 || currentIndex > words.length) return { delayMultiplier: 1.0 };
+    const previousTokenIndex = currentIndex - 1;
+    const previousToken = words[previousTokenIndex];
     const punctuationType = getPunctuationType(previousToken);
     if (punctuationType === 'sentence' || punctuationType === 'clause') {
-      return { delayMultiplier: 3.0 }; // Triple delay
+      return { delayMultiplier: 3.0 }; // Triple delay after sentence/clause ends
     }
     return { delayMultiplier: 1.0 };
   }, [currentIndex, words]);
 
+  // Memoize the result of findChunkInfo for the current index
+  const currentChunkInfo = useMemo(() =>
+    findChunkInfo(currentIndex, chunkWordTarget, words),
+    [currentIndex, chunkWordTarget, words]
+  );
+
+  // Effect to update the adjustment state based on the memoized chunk info
+  useEffect(() => {
+    setIsChunkSizeAdjusted(currentChunkInfo.isAdjusted);
+  }, [currentChunkInfo.isAdjusted]);
+
+
   const advanceChunk = useCallback(() => {
-    const { endIndex, isAdjusted } = findChunkInfo(currentIndex, chunkWordTarget, words);
-    setIsChunkSizeAdjusted(isAdjusted); // Update adjustment state
+    const { endIndex } = currentChunkInfo; // Use memoized chunk info
 
     if (endIndex >= words.length) {
       setCurrentIndex(words.length);
@@ -57,38 +70,47 @@ export function useReaderState() {
     } else {
       setCurrentIndex(endIndex);
     }
-  }, [currentIndex, words, chunkWordTarget, toast]); // Removed setIsChunkSizeAdjusted from deps
+  }, [words.length, currentChunkInfo, toast]); // Depends on memoized info now
+
 
   useEffect(() => {
     if (timeoutRef.current) clearTimeout(timeoutRef.current);
 
     if (isPlaying && words.length > 0 && currentIndex < words.length) {
       const { delayMultiplier } = currentChunkPunctuationInfo;
-      const { actualWordsInChunk, isAdjusted } = findChunkInfo(currentIndex, chunkWordTarget, words);
-      // Set isAdjusted state based on the *current* chunk's calculation before setting the timer
-      setIsChunkSizeAdjusted(isAdjusted);
+      const { actualWordsInChunk } = currentChunkInfo; // Use memoized info
 
       const wordInterval = calculateWordInterval();
       const effectiveWords = Math.max(1, actualWordsInChunk); // Use actual words in the *current* chunk
       const currentDelay = wordInterval * effectiveWords * delayMultiplier;
 
-      timeoutRef.current = setTimeout(advanceChunk, Math.max(50, currentDelay));
+      timeoutRef.current = setTimeout(advanceChunk, Math.max(50, currentDelay)); // Use at least 50ms delay
     }
 
+    // Cleanup function remains the same
     return () => { if (timeoutRef.current) clearTimeout(timeoutRef.current); };
-  }, [isPlaying, words, currentIndex, advanceChunk, calculateWordInterval, chunkWordTarget, currentChunkPunctuationInfo]); // Keep setIsChunkSizeAdjusted here or rely on advanceChunk? Rely on advanceChunk for next state, effect for current visual state
-
+  }, [
+      isPlaying,
+      words, // Need words.length
+      currentIndex,
+      advanceChunk,
+      calculateWordInterval,
+      currentChunkPunctuationInfo, // Depends on index, words
+      currentChunkInfo // Depends on index, target, words
+  ]);
 
   // --- Progress Update ---
 
   useEffect(() => {
-    if (actualWordCount > 0) {
+    if (actualWordCount > 0 && words.length > 0) { // Added words.length check
       let wordsProcessed = 0;
-      for (let i = 0; i < Math.min(currentIndex, words.length); i++) {
+      // Count words up to the *start* of the current chunk
+      for (let i = 0; i < currentIndex; i++) {
         if (isActualWord(words[i])) {
           wordsProcessed++;
         }
       }
+      // Calculate progress based on words processed so far
       const currentProgress = (wordsProcessed / actualWordCount) * 100;
       setProgress(Math.min(100, Math.max(0, currentProgress)));
     } else {
@@ -201,10 +223,16 @@ export function useReaderState() {
       return;
     }
     if (currentIndex >= words.length) {
-      setCurrentIndex(0); setProgress(0); setIsPlaying(true); toast({ title: "Restarting" });
+      // If at the end, reset and play from start
+      setCurrentIndex(0);
+      setProgress(0);
+      setIsPlaying(true); // Start playing immediately
+      toast({ title: "Restarting" });
     } else {
+      // Toggle play/pause
       setIsPlaying((prev) => {
         const newState = !prev;
+        // Clear timeout if pausing manually
         if (!newState && timeoutRef.current) clearTimeout(timeoutRef.current);
         return newState;
       });
@@ -212,44 +240,48 @@ export function useReaderState() {
   };
 
   const goToNextChunk = useCallback(() => {
-    if (isPlaying) setIsPlaying(false);
-    advanceChunk();
-  }, [advanceChunk, isPlaying]);
+    if (isPlaying) setIsPlaying(false); // Pause if playing
+    if (currentIndex < words.length) {
+      const { endIndex } = findChunkInfo(currentIndex, chunkWordTarget, words);
+      setCurrentIndex(endIndex >= words.length ? words.length : endIndex); // Move to next chunk or end
+    }
+  }, [currentIndex, words, chunkWordTarget, isPlaying]);
 
   const goToPreviousChunk = useCallback(() => {
-    if (isPlaying) setIsPlaying(false);
-    // Use imported navigation function
+    if (isPlaying) setIsPlaying(false); // Pause if playing
     const previousStartIndex = findPreviousChunkStart(currentIndex, chunkWordTarget, words);
-    setCurrentIndex(previousStartIndex);
+    setCurrentIndex(previousStartIndex); // Move to the start of the previous chunk
   }, [currentIndex, chunkWordTarget, words, isPlaying]);
 
   const goToBeginning = useCallback(() => {
     if (isPlaying) setIsPlaying(false);
     setCurrentIndex(0);
-    setProgress(0);
+    setProgress(0); // Reset progress visually
     toast({ title: "Jumped to Beginning" });
   }, [isPlaying, toast]);
 
   const handleProgressClick = useCallback((clickPercentage: number) => {
     if (actualWordCount === 0 || words.length === 0) return;
-    setIsPlaying(false);
-    const targetWordNum = Math.max(1, Math.ceil(actualWordCount * clickPercentage)); // Target *word number* (1-based)
-    // Use imported navigation function
+    if (isPlaying) setIsPlaying(false); // Pause if playing
+    const targetWordNum = Math.max(1, Math.ceil(actualWordCount * clickPercentage));
     const targetChunkStartIndex = findChunkStartForWordIndex(targetWordNum, chunkWordTarget, words);
     setCurrentIndex(targetChunkStartIndex);
-  }, [actualWordCount, words, chunkWordTarget]);
+  }, [actualWordCount, words, chunkWordTarget, isPlaying]);
+
 
   // --- Memoized Values for Display ---
 
-  const { endIndex: currentChunkEndIndex } = useMemo(() =>
-    findChunkInfo(currentIndex, chunkWordTarget, words),
-    [currentIndex, chunkWordTarget, words]
+  // Use the memoized currentChunkInfo for display tokens
+  const currentTokensForDisplay = useMemo(() =>
+    words.slice(currentIndex, currentChunkInfo.endIndex),
+    [words, currentIndex, currentChunkInfo.endIndex]
   );
 
-  const currentTokensForDisplay = useMemo(() =>
-    words.slice(currentIndex, currentChunkEndIndex),
-    [words, currentIndex, currentChunkEndIndex]
-  );
+  // Determine if the *next* chunk can be navigated to
+  const canGoNext = currentIndex < words.length;
+  // Determine if the *previous* chunk can be navigated to
+  const canGoPrevious = currentIndex > 0;
+
 
   // Return state and handlers
   return {
@@ -271,5 +303,7 @@ export function useReaderState() {
     goToBeginning,
     handleProgressClick,
     currentTokensForDisplay,
+    canGoNext, // Expose navigation states
+    canGoPrevious, // Expose navigation states
   };
 }
