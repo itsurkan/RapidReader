@@ -5,7 +5,7 @@ import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import type { Book } from 'epubjs'; // Import epubjs types only
 import { ReaderControls } from '@/components/reader-controls';
 import { ReadingDisplay } from '@/components/reading-display';
-import { Progress } from '@/components/ui/progress';
+import { Progress } from '@/components/ui/progress'; // Ensure Progress is imported correctly
 import { useToast } from '@/hooks/use-toast';
 import { cn } from '@/lib/utils';
 
@@ -54,57 +54,36 @@ const findChunkInfo = (
             wordsSinceLastPunctuation++;
         }
 
-        currentIndex++; // Move to the next token index
+        punctuationFound = getPunctuationType(token); // Check punctuation *before* incrementing currentIndex
 
-        punctuationFound = getPunctuationType(token);
-
-        // End chunk if a sentence-ending punctuation is found
-        if (punctuationFound === 'sentence') {
-            break;
-        }
-
-        // End chunk if a clause-ending punctuation is found AND we have a reasonable number of words *since the last punctuation*
-        // This helps create more logical breaks around commas/semicolons.
-        if (punctuationFound === 'clause' && wordsSinceLastPunctuation >= Math.max(1, Math.ceil(targetWordCount / 1.5))) {
-             wordsSinceLastPunctuation = 0; // Reset counter after a clause break
-            break;
-        }
-        // Reset counter if clause punctuation found but not enough words followed
-        if (punctuationFound === 'clause') {
-             wordsSinceLastPunctuation = 0;
-        }
-
-
-        // If we reach the target word count *and* the current token isn't sentence punctuation, check lookahead.
+        // Lookahead Logic (only if not ending on current punctuation)
         if (wordsInCurrentChunk >= targetWordCount && punctuationFound !== 'sentence') {
-            // Dynamic chunk size adjustment: Look ahead for punctuation
-             let lookaheadIndex = currentIndex; // Start looking from the *next* token
-             let lookaheadWords = 0;
-             let foundPunctuationAhead = false;
-             let firstPunctuationIndex = -1;
+            let lookaheadIndex = currentIndex + 1; // Start looking from the *next* token
+            let lookaheadWords = 0;
+            let firstPunctuationIndex = -1;
 
-             // Look ahead up to `maxWordExtension` additional *words* (or end of text)
-             while(lookaheadIndex < allTokens.length) {
-                 const nextToken = allTokens[lookaheadIndex];
-                 if (isActualWord(nextToken)) {
-                     lookaheadWords++;
-                 }
-                  // Stop looking if we exceed the max allowed extension
-                 if (lookaheadWords > maxWordExtension && firstPunctuationIndex === -1) {
-                      break;
-                 }
+            // Look ahead up to `maxWordExtension` additional *words* (or end of text)
+            while(lookaheadIndex < allTokens.length) {
+                const nextToken = allTokens[lookaheadIndex];
+                if (isActualWord(nextToken)) {
+                    lookaheadWords++;
+                }
 
-                 const lookaheadPunctuationType = getPunctuationType(nextToken);
-                 if (lookaheadPunctuationType === 'sentence' || lookaheadPunctuationType === 'clause') {
-                     foundPunctuationAhead = true;
-                     firstPunctuationIndex = lookaheadIndex;
-                     break; // Found the first significant punctuation
-                 }
-                 lookaheadIndex++;
-             }
+                const lookaheadPunctuationType = getPunctuationType(nextToken);
+                if (lookaheadPunctuationType === 'sentence' || lookaheadPunctuationType === 'clause') {
+                    firstPunctuationIndex = lookaheadIndex;
+                    break; // Found the first significant punctuation
+                }
+
+                // Stop looking if we exceed the max allowed extension *without* finding punctuation
+                if (lookaheadWords >= maxWordExtension && firstPunctuationIndex === -1) {
+                     break;
+                }
+                lookaheadIndex++;
+            }
 
             // If we found punctuation within the allowed extension range
-            if (foundPunctuationAhead && firstPunctuationIndex !== -1) {
+            if (firstPunctuationIndex !== -1) {
                 // Calculate words if we extend to the found punctuation
                 let wordsIfExtended = 0;
                 for (let i = startIndex; i <= firstPunctuationIndex; i++) {
@@ -114,35 +93,46 @@ const findChunkInfo = (
                 }
 
                 // Only extend if it doesn't exceed the target + max extension limit *too much*
-                // (Allow slight overrun to include the punctuation itself)
                 if (wordsIfExtended <= targetWordCount + maxWordExtension) {
-                    currentIndex = firstPunctuationIndex + 1; // Extend chunk to include punctuation
-                    // Recalculate words in the extended chunk (important!)
-                    wordsInCurrentChunk = wordsIfExtended;
+                    currentIndex = firstPunctuationIndex; // Extend chunk to *include* punctuation
+                    wordsInCurrentChunk = wordsIfExtended; // Recalculate words in the extended chunk
+                    punctuationFound = getPunctuationType(allTokens[currentIndex]); // Update punctuation type for the new end
+                    // Now increment currentIndex one last time to point *after* the chunk
+                    currentIndex++;
                     break; // Break after extending
                 } else {
                     // Exceeded limit even with lookahead, break where we were (before lookahead)
-                    currentIndex--; // Go back one step as the current loop incremented it already
-                    // Correct wordsInCurrentChunk if the token we backed off from was a word
-                    if (isActualWord(allTokens[currentIndex])) {
-                        wordsInCurrentChunk--;
-                    }
+                    // currentIndex is already pointing to the last token considered *before* lookahead started
+                    // But we need to break the loop
+                    currentIndex++; // Increment to exit the loop correctly
                     break;
                 }
             } else {
                 // No punctuation found within allowed range, or lookahead wasn't triggered.
-                // Break at the current point if it's not punctuation, or if it's clause punctuation without enough following words (handled earlier).
-                 if (punctuationFound === 'none') {
-                    break;
-                 }
-                 // If the current token *is* clause punctuation but didn't trigger the break earlier,
-                 // it means we didn't have enough words *since the last significant punctuation*.
-                 // In this case, we *should* break here.
-                 if (punctuationFound === 'clause') {
-                    break;
-                 }
+                // Break at the current point
+                currentIndex++; // Increment to exit the loop correctly
+                break;
             }
+        } else {
+             // Move to the next token index if we haven't met the condition or found punctuation
+             currentIndex++;
         }
+
+        // End chunk immediately if a sentence-ending punctuation is found
+        if (punctuationFound === 'sentence') {
+            break;
+        }
+
+        // End chunk if a clause-ending punctuation is found AND we have a reasonable number of words *since the last punctuation*
+        if (punctuationFound === 'clause' && wordsSinceLastPunctuation >= Math.max(1, Math.ceil(targetWordCount / 1.5))) {
+             wordsSinceLastPunctuation = 0; // Reset counter after a clause break
+            break;
+        }
+        // Reset counter if clause punctuation found but not enough words followed
+        if (punctuationFound === 'clause') {
+             wordsSinceLastPunctuation = 0;
+        }
+
     }
 
      // Ensure endIndex doesn't exceed bounds
@@ -199,11 +189,49 @@ const findPreviousChunkStart = (
     return lastValidStartIndex;
 };
 
+// Helper function to find the start index of the chunk containing a specific word index
+const findChunkStartForWordIndex = (
+    targetWordIndex: number,
+    targetWordCount: number,
+    allTokens: string[]
+): number => {
+    if (targetWordIndex <= 0) return 0;
+
+    let simulatedStartIndex = 0;
+    let wordsCounted = 0;
+    let chunkStartIndex = 0; // The start index of the chunk we're currently calculating
+
+    while (simulatedStartIndex < allTokens.length) {
+        chunkStartIndex = simulatedStartIndex; // Store the start index of the current chunk
+        const { endIndex, actualWordsInChunk } = findChunkInfo(simulatedStartIndex, targetWordCount, allTokens);
+
+        // Count actual words up to the end of this chunk
+        let wordsInThisChunkAndBefore = 0;
+        for(let i=0; i < endIndex; i++){
+            if(isActualWord(allTokens[i])) {
+                wordsInThisChunkAndBefore++;
+            }
+        }
+
+        // If the target word index falls within the words processed *up to the end of this chunk*,
+        // then the start of *this* chunk is our answer.
+        if (wordsInThisChunkAndBefore >= targetWordIndex) {
+            return chunkStartIndex;
+        }
+
+        if (endIndex <= simulatedStartIndex) break; // Avoid infinite loop
+        simulatedStartIndex = endIndex; // Move to the start of the next chunk
+    }
+
+    // If the loop finishes (e.g., targetWordIndex is beyond the last word), return the start of the last calculated chunk.
+    return chunkStartIndex;
+};
+
 
 export default function Home() {
   const [text, setText] = useState<string>('');
-  const [words, setWords] = useState<string[]>([]); // Changed from tokens back to words for clarity, but logic uses tokens
-  const [actualWordCount, setActualWordCount] = useState<number>(0);
+  const [words, setWords] = useState<string[]>([]); // Holds all tokens (words and punctuation)
+  const [actualWordCount, setActualWordCount] = useState<number>(0); // Count of actual words only
   const [currentIndex, setCurrentIndex] = useState<number>(0); // Index in the words array
   const [wpm, setWpm] = useState<number>(300);
   const [chunkWordTarget, setChunkWordTarget] = useState<number>(2); // Target *approximate words* per chunk display
@@ -213,8 +241,13 @@ export default function Home() {
 
   // Ref for managing setTimeout
   const timeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const toastCtrlRef = useRef<{
+    id: string;
+    dismiss: () => void;
+    update: (props: any) => void;
+  } | null>(null); // Ref to store toast controller
   const { toast } = useToast();
-  const toastRef = useRef<ReturnType<typeof toast> | null>(null); // Ref to store toast ID
+
 
   // Function to calculate base interval delay per *word* based on WPM
   const calculateWordInterval = useCallback(() => {
@@ -274,8 +307,13 @@ export default function Home() {
     let toastId: string | undefined; // Variable to hold the loading toast ID
 
     // Show loading toast immediately
-    const loadingToast = toast({ title: 'Loading EPUB...', description: `Processing ${file.name}` });
-    toastId = loadingToast.id; // Store the ID
+     const loadingToast = toast({
+        title: 'Loading EPUB...',
+        description: `Processing ${file.name}`
+     });
+     // Store the controller, not just the ID
+     toastCtrlRef.current = loadingToast;
+     toastId = loadingToast.id;
 
     return new Promise(async (resolve, reject) => { // Make the promise async
         try {
@@ -415,9 +453,10 @@ export default function Home() {
             else errorMessage += " Unexpected error.";
             reject(new Error(errorMessage));
         } finally {
-            // Dismiss loading toast when done (success or error)
-            if (toastId && loadingToast.dismiss) {
-                loadingToast.dismiss();
+            // Dismiss loading toast when done (success or error) using the controller
+            if (toastCtrlRef.current) {
+                toastCtrlRef.current.dismiss();
+                toastCtrlRef.current = null; // Clear ref after dismissing
             }
             if (book && typeof book.destroy === 'function') {
                 try { book.destroy(); } catch (destroyError) { console.warn("Error destroying book instance:", destroyError); }
@@ -442,8 +481,9 @@ export default function Home() {
       setWords([]);
       setActualWordCount(0);
 
-      // Use the ref to store the toast instance
-      toastRef.current = toast({ title: 'Loading File...', description: `Processing ${file.name}` });
+      // Show loading toast and store controller
+      toastCtrlRef.current = toast({ title: 'Loading File...', description: `Processing ${file.name}` });
+      const loadingToastId = toastCtrlRef.current?.id; // Get ID for potential error case dismissal
 
       try {
          let fileContent = '';
@@ -459,7 +499,7 @@ export default function Home() {
            });
          } else if (lowerCaseName.endsWith('.epub') || file.type === 'application/epub+zip') {
              console.log("Parsing EPUB file...");
-             fileContent = await parseEpub(file);
+             fileContent = await parseEpub(file); // parseEpub now handles its own loading toast dismissal
          } else if (lowerCaseName.endsWith('.mobi')) {
             throw new Error(".mobi files are not supported. Please use .txt or .epub.");
          } else {
@@ -468,20 +508,23 @@ export default function Home() {
 
          console.log(`File content length: ${fileContent.length}`);
          setText(fileContent);
+         // Split by one or more whitespace characters OR line breaks
          const newWords = fileContent.split(/[\s\n]+/).filter(token => token.length > 0);
-         console.log(`Extracted ${newWords.length} words/tokens.`);
+         console.log(`Extracted ${newWords.length} tokens.`);
          setWords(newWords);
          const wordCount = newWords.filter(isActualWord).length;
          setActualWordCount(wordCount);
-         console.log(`Counted ${actualWordCount} actual words.`);
+         console.log(`Counted ${wordCount} actual words.`);
 
-         // Dismiss loading toast using the ref
-         if (toastRef.current && toastRef.current.dismiss) {
-            toastRef.current.dismiss();
+         // Dismiss the initial loading toast IF parseEpub didn't handle it (i.e., it was a TXT file)
+         if (toastCtrlRef.current && loadingToastId === toastCtrlRef.current.id && !lowerCaseName.endsWith('.epub')) {
+             toastCtrlRef.current.dismiss();
+             toastCtrlRef.current = null;
          }
 
+
          if (newWords.length === 0 && fileContent.length > 0) {
-             throw new Error("File loaded, but no words extracted. Check content format.");
+             throw new Error("File loaded, but no tokens extracted. Check content format.");
          } else if (newWords.length === 0) {
              throw new Error("The file appears to be empty.");
          } else if (wordCount === 0) {
@@ -491,18 +534,22 @@ export default function Home() {
          }
       } catch (error: any) {
          console.error('Error loading file:', error);
-         // Dismiss loading toast if it exists
-         if (toastRef.current && toastRef.current.dismiss) {
-             toastRef.current.dismiss();
+          // Dismiss loading toast if it exists and hasn't been dismissed by parseEpub
+         if (toastCtrlRef.current && loadingToastId === toastCtrlRef.current.id) {
+            toastCtrlRef.current.dismiss();
+            toastCtrlRef.current = null;
          }
          toast({ title: 'Error Loading File', description: error.message || 'Unknown error.', variant: 'destructive', duration: 7000 });
          setFileName(null); setText(''); setWords([]); setActualWordCount(0);
       } finally {
         if (event.target) event.target.value = ''; // Clear file input
-        toastRef.current = null; // Clear the toast ref
+        // Ensure the ref is cleared if an error happened before parseEpub finished
+        if (toastCtrlRef.current && loadingToastId === toastCtrlRef.current.id) {
+            toastCtrlRef.current = null;
+        }
       }
     },
-    [parseEpub, toast]
+    [parseEpub, toast] // Keep parseEpub and toast as dependencies
   );
 
 
@@ -550,13 +597,14 @@ export default function Home() {
         // Calculate actual words in the *upcoming* chunk
         const { actualWordsInChunk } = findChunkInfo(currentIndex, chunkWordTarget, words);
         const wordInterval = calculateWordInterval();
-        const effectiveWords = Math.max(1, actualWordsInChunk);
+        const effectiveWords = Math.max(1, actualWordsInChunk); // Ensure at least 1 word's worth of delay
         const currentDelay = wordInterval * effectiveWords * delayMultiplier;
 
         console.log(`Scheduling next chunk. Words: ${actualWordsInChunk}, Interval: ${wordInterval.toFixed(0)}ms, Multiplier: ${delayMultiplier.toFixed(2)}, Delay: ${currentDelay.toFixed(0)}ms`);
-        timeoutRef.current = setTimeout(advanceChunk, Math.max(50, currentDelay));
+        timeoutRef.current = setTimeout(advanceChunk, Math.max(50, currentDelay)); // Ensure minimum delay
      }
 
+     // Cleanup function to clear timeout if component unmounts or dependencies change
      return () => { if (timeoutRef.current) clearTimeout(timeoutRef.current); };
    }, [ isPlaying, words, currentIndex, advanceChunk, calculateWordInterval, chunkWordTarget, currentChunkPunctuationInfo ]);
 
@@ -606,6 +654,24 @@ export default function Home() {
      setCurrentIndex(previousStartIndex);
    }, [currentIndex, chunkWordTarget, words, isPlaying]);
 
+   // --- Progress Bar Click Handling ---
+   const handleProgressClick = useCallback((clickPercentage: number) => {
+     if (actualWordCount === 0 || words.length === 0) return;
+
+     setIsPlaying(false); // Pause reading when seeking
+
+     // Calculate the target word index based on the percentage
+     const targetWordIndex = Math.max(1, Math.ceil(actualWordCount * clickPercentage));
+
+     // Find the start index of the chunk that contains this target word index
+     const targetChunkStartIndex = findChunkStartForWordIndex(targetWordIndex, chunkWordTarget, words);
+
+     setCurrentIndex(targetChunkStartIndex);
+
+     console.log(`Progress click: ${clickPercentage * 100}%. Target word index: ${targetWordIndex}. Jumped to chunk start index: ${targetChunkStartIndex}`);
+
+   }, [actualWordCount, words, chunkWordTarget]);
+
 
   // Find the chunk info for the *current* display
   const { endIndex: currentChunkEndIndex } = findChunkInfo(currentIndex, chunkWordTarget, words);
@@ -623,7 +689,30 @@ export default function Home() {
 
   return (
     <div className="flex flex-col h-screen bg-background text-foreground">
-      <Progress value={progress} className="w-full h-1 fixed top-0 left-0 z-20" />
+       <Progress
+        value={progress}
+        className="w-full h-2 fixed top-0 left-0 z-20 cursor-pointer" // Added cursor-pointer
+        onClick={(e) => {
+            const progressBar = e.currentTarget;
+            const clickX = e.clientX - progressBar.getBoundingClientRect().left;
+            const percentage = clickX / progressBar.offsetWidth;
+            handleProgressClick(percentage);
+        }}
+        aria-label={`Reading progress: ${Math.round(progress)}%`}
+        role="slider" // Semantically it acts like a slider
+        aria-valuenow={progress}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        tabIndex={0} // Make it focusable
+        onKeyDown={(e) => {
+            // Basic keyboard navigation for accessibility
+            if (e.key === 'ArrowRight') {
+                goToNextChunk();
+            } else if (e.key === 'ArrowLeft') {
+                goToPreviousChunk();
+            }
+        }}
+       />
       <main className="flex-grow flex items-center justify-center overflow-hidden pt-5 pb-20 px-4">
         {words.length > 0 ? (
           <ReadingDisplay
