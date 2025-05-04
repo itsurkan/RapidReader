@@ -10,8 +10,9 @@
     "start": "next start",
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
-    "test": "jest",
-    "test:jest": "jest"
+    "test": "jest --testPathIgnorePatterns=\"tests/app.test.tsx\"",
+    "test:jest": "jest",
+    "test:e2e": "npx playwright test"
   },
   "dependencies": {
     "@genkit-ai/googleai": "^1.6.2",

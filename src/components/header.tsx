@@ -12,7 +12,7 @@ import { Slider } from '@/components/ui/slider';
 import { Input } from '@/components/ui/input';
 import { Separator } from '@/components/ui/separator';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
-import { useBackground } from '@/hooks/useBackground';
+import { useBackground, DEFAULT_IMAGES } from '@/hooks/useBackground'; // Import DEFAULT_IMAGES
 import { useToast } from '@/hooks/use-toast';
 import { cn } from '@/lib/utils';
 
@@ -30,6 +30,7 @@ export function Header({
   setChunkWordTarget,
 }: HeaderProps) {
   const bgImageInputRef = React.useRef<HTMLInputElement>(null);
+  const [settingsOpen, setSettingsOpen] = React.useState(false); // Control popover state
   const { toast } = useToast();
   const {
     backgroundType,
@@ -37,7 +38,7 @@ export function Header({
     setBackgroundColor,
     setBackgroundImage,
     setCustomBackground,
-    defaultImages,
+    // defaultImages, // Get default images from import now
     isInitialized,
   } = useBackground();
 
@@ -60,6 +61,7 @@ export function Header({
       reader.onload = (e) => {
         if (typeof e.target?.result === 'string') {
           setCustomBackground(e.target.result);
+          setSettingsOpen(false); // Close popover after successful custom bg set
         } else {
            toast({ title: "Error Reading File", description: "Could not read the image file.", variant: "destructive" });
         }
@@ -74,17 +76,19 @@ export function Header({
      }
   };
 
+  // Determine the current value for the RadioGroup
   const radioValue = isInitialized
     ? backgroundType === 'color'
       ? 'theme-color'
       : backgroundType === 'custom'
       ? 'custom-image'
-      : backgroundValue
-    : 'theme-color';
+      : backgroundValue // This will be the URL of the selected default image or the custom data URL
+    : 'theme-color'; // Default before initialization
+
 
   return (
     <header className="fixed top-0 left-0 right-0 bg-card p-2 shadow-sm border-b flex items-center justify-end z-20 h-14"> {/* Increased z-index */}
-      <Popover>
+      <Popover open={settingsOpen} onOpenChange={setSettingsOpen}>
         <PopoverTrigger asChild>
           <Button variant="outline" size="icon" aria-label="Settings">
             <Settings />
@@ -95,7 +99,7 @@ export function Header({
             <div className="space-y-2">
               <h4 className="font-medium leading-none">Settings</h4>
               <p className="text-sm text-muted-foreground">
-                Adjust reading settings.
+                Adjust reading and display settings.
               </p>
             </div>
             <Separator />
@@ -143,15 +147,15 @@ export function Header({
                   onValueChange={(value) => {
                     if (value === 'theme-color') {
                       setBackgroundColor();
+                      setSettingsOpen(false); // Close popover on selection
                     } else if (value === 'custom-image') {
-                      if (backgroundType !== 'custom') {
-                         handleBgImageUploadClick();
-                      }
-                      else if (backgroundValue) {
-                         setCustomBackground(backgroundValue);
-                      }
+                       // If "Custom" radio button itself is clicked, trigger file upload
+                       handleBgImageUploadClick();
+                       // Don't close popover, let upload handler do it
                     } else {
+                      // Selecting a default image URL
                       setBackgroundImage(value);
+                      setSettingsOpen(false); // Close popover on selection
                     }
                   }}
                   className="grid grid-cols-3 gap-2"
@@ -169,15 +173,15 @@ export function Header({
                        <span className="text-xs">Theme</span>
                      </div>
                   </Label>
-                  {Object.entries(defaultImages).map(([key, url]) => (
+                  {Object.entries(DEFAULT_IMAGES).map(([key, { url, hint }]) => ( // Destructure url and hint
                     <Label
                       key={key}
                       htmlFor={`bg-${key}`}
                       className={cn(
                         "relative cursor-pointer rounded-md border p-2 hover:border-accent [&:has(:checked)]:border-accent",
-                         radioValue === url && "border-accent"
+                         radioValue === url && "border-accent" // Check against URL
                       )}
-                      data-ai-hint="abstract landscape nature"
+                      data-ai-hint={hint} // Use the hint from DEFAULT_IMAGES
                     >
                       <RadioGroupItem value={url} id={`bg-${key}`} className="sr-only" />
                       <img
@@ -197,13 +201,16 @@ export function Header({
                         "cursor-pointer rounded-md border p-2 hover:bg-accent hover:text-accent-foreground",
                          radioValue === 'custom-image' && "bg-accent text-accent-foreground"
                       )}
+                      // This onClick should only trigger the file input if custom is already selected.
+                      // The RadioGroup's onValueChange handles the initial selection.
                       onClick={(e) => {
                          if (radioValue === 'custom-image') {
-                             e.preventDefault();
-                             handleBgImageUploadClick();
+                             e.preventDefault(); // Prevent radio state change
+                             handleBgImageUploadClick(); // Just open file dialog
                          }
                        }}
                     >
+                     {/* Value 'custom-image' helps identify this option in onValueChange */}
                      <RadioGroupItem value="custom-image" id="bg-custom-image" className="sr-only" />
                      <div className="flex flex-col items-center gap-1">
                        <ImageIcon className="w-5 h-5" />
