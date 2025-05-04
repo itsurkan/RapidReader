@@ -26,13 +26,16 @@ export default function RootLayout({
   useBackground(); // This call initializes the hook and its effects
 
   return (
-    <html lang="en" suppressHydrationWarning={true}> {/* Add suppressHydrationWarning here */}
+    <html lang="en" suppressHydrationWarning={true}>
+      {/* Remove any whitespace or comments between <html> and <head> */}
       <head>
          {/* Keep static metadata here */}
          <title>RapidReader</title>
          <meta name="description" content="Speed reading application" />
+         {/* Default texture background - Applied via the hook */}
          {/* Add other static head elements if needed */}
       </head>
+      {/* Remove any whitespace or comments between </head> and <body> */}
       <body
         className={`${inter.className} antialiased`} // Apply font and basic styling
         suppressHydrationWarning={true} // Ensure suppression is on the body tag as well
@@ -40,6 +43,7 @@ export default function RootLayout({
         {children}
         <Toaster /> {/* Add Toaster component */}
       </body>
+      {/* Remove any whitespace or comments between </body> and </html> */}
     </html>
   );
 }
