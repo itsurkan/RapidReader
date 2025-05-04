@@ -23,11 +23,9 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   // Initialize the background hook.
-  // The hook itself contains the useEffect to apply the background to the body.
+  // The hook itself contains the useEffect to apply the background to the body on the client-side.
   useBackground();
 
-  // We no longer need to manually apply styles here as the hook handles it.
-  // The suppressHydrationWarning might still be useful depending on other client-side effects.
   return (
     <html lang="en">
       <head>
@@ -38,7 +36,7 @@ export default function RootLayout({
       </head>
       <body
         className={`${inter.className} antialiased`} // Apply font and basic styling
-        suppressHydrationWarning={true}
+        // suppressHydrationWarning={true} // Removed: Better to fix the root cause
       >
         {children}
         <Toaster /> {/* Add Toaster component */}

@@ -4,7 +4,7 @@
 import { useState, useEffect, useCallback } from 'react';
 
 type BackgroundType = 'color' | 'image' | 'custom';
-type BackgroundValue = string; // HSL string for color, URL for image, data URL for custom
+type BackgroundValue = string; // URL for image, data URL for custom, empty string for theme color
 
 const LOCAL_STORAGE_KEY_TYPE = 'rapidreader_background_type';
 const LOCAL_STORAGE_KEY_VALUE = 'rapidreader_background_value';
@@ -17,7 +17,7 @@ const DEFAULT_IMAGES: Record<string, string> = {
 };
 
 const DEFAULT_BACKGROUND_TYPE: BackgroundType = 'color';
-// Default color will be picked up by the CSS variables
+// Default color will be picked up by the CSS variables when value is empty
 
 export function useBackground() {
   const [backgroundType, setBackgroundType] = useState<BackgroundType>(DEFAULT_BACKGROUND_TYPE);
@@ -26,6 +26,7 @@ export function useBackground() {
 
   // Load initial background from localStorage
   useEffect(() => {
+    // This effect should only run on the client after mount
     try {
       const storedType = localStorage.getItem(LOCAL_STORAGE_KEY_TYPE) as BackgroundType | null;
       const storedValue = localStorage.getItem(LOCAL_STORAGE_KEY_VALUE);
@@ -59,26 +60,27 @@ export function useBackground() {
 
   // Apply background style to body and save changes to localStorage
   useEffect(() => {
-    // Only apply/save after initialization to avoid premature writes
-    if (!isInitialized) return;
+    // Only apply/save after initialization to avoid premature writes and SSR issues
+    if (!isInitialized || typeof window === 'undefined') return;
 
     try {
       if (backgroundType === 'color') {
-        // Remove image styles, rely on CSS variables for color
+        // Remove image styles, reset background color to let CSS variables take effect
         document.body.style.backgroundImage = '';
         document.body.style.backgroundSize = '';
         document.body.style.backgroundPosition = '';
         document.body.style.backgroundRepeat = '';
-        // Save preference
+        document.body.style.backgroundColor = ''; // Reset inline style
+        // Save preference (value is empty string for theme color)
         localStorage.setItem(LOCAL_STORAGE_KEY_TYPE, 'color');
-        localStorage.setItem(LOCAL_STORAGE_KEY_VALUE, backgroundValue); // Value might be empty string for default theme color
+        localStorage.setItem(LOCAL_STORAGE_KEY_VALUE, '');
       } else if (backgroundType === 'image' || backgroundType === 'custom') {
         document.body.style.backgroundImage = `url("${backgroundValue}")`;
         document.body.style.backgroundSize = 'cover';
         document.body.style.backgroundPosition = 'center';
         document.body.style.backgroundRepeat = 'no-repeat';
-         // Remove potential background color override to let image show
-         document.body.style.backgroundColor = '';
+        // Ensure no inline background color overrides the image
+        document.body.style.backgroundColor = '';
         // Save preference
         localStorage.setItem(LOCAL_STORAGE_KEY_TYPE, backgroundType);
         localStorage.setItem(LOCAL_STORAGE_KEY_VALUE, backgroundValue);
@@ -94,7 +96,7 @@ export function useBackground() {
   }, []);
 
   const setBackgroundColor = useCallback(() => {
-    updateBackground('color', ''); // Empty string value signifies using the theme color
+    updateBackground('color', ''); // Empty string value signifies using the theme color from CSS
   }, [updateBackground]);
 
   const setBackgroundImage = useCallback((imageUrl: string) => {
@@ -115,3 +117,4 @@ export function useBackground() {
     isInitialized, // Expose initialization state if needed by UI
   };
 }
+
