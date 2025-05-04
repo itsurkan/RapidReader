@@ -1,5 +1,5 @@
 
-import { isActualWord } from '@/lib/wordUtils'; // Correct path using alias
+import { isActualWord } from '@/lib/readingUtils'; // Correct path using alias
 import { getPunctuationType } from '@/lib/punctuationUtils'; // Correct path using alias
 
 interface ChunkInfo {

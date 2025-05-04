@@ -9,4 +9,17 @@ export const calculatePivot = (token: string): number => {
   return Math.max(0, Math.min(pivot, len - 1));
 };
 
-// NOTE: isActualWord and getPunctuationType were moved to wordUtils.ts and punctuationUtils.ts respectively
+/**
+ * Checks if a token is an actual word (contains letters or numbers).
+ * Handles hyphens and apostrophes within words.
+ * @param token The token to check.
+ * @returns True if the token is considered an actual word, false otherwise.
+ */
+export const isActualWord = (token: string): boolean => {
+    if (!token) return false;
+    // Regular expression to match tokens containing at least one letter (Unicode) or number.
+    // Allows hyphens and apostrophes commonly found within words.
+    // Updated to use Unicode property escapes for better letter matching.
+    return /[\p{L}\p{N}]+/u.test(token);
+    // Old regex: return /[a-zA-Z0-9\u00C0-\u00FF]+/.test(token); // Basic Latin + some common accented chars
+};
