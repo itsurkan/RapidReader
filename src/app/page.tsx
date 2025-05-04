@@ -23,7 +23,9 @@ const isActualWord = (token: string): boolean => !!token && /[\p{L}\p{N}'-]+/gu.
 // Helper function to determine punctuation type at the end of a token
 const getPunctuationType = (token: string): 'sentence' | 'clause' | 'none' => {
     if (!token) return 'none';
+    // Updated to check specifically for sentence-ending punctuation
     if (/[.?!]$/.test(token)) return 'sentence';
+    // Updated to check specifically for clause-ending punctuation
     if (/[,;:]$/.test(token)) return 'clause';
     return 'none';
 };
@@ -40,6 +42,7 @@ const findChunkInfo = (
 
     let wordsInCurrentChunk = 0;
     let currentIndex = startIndex;
+    let punctuationFound: 'sentence' | 'clause' | 'none' = 'none';
 
     while (currentIndex < allTokens.length) {
         const token = allTokens[currentIndex];
@@ -49,22 +52,24 @@ const findChunkInfo = (
 
         currentIndex++; // Move to the next token index
 
-        const punctuationType = getPunctuationType(token);
+        punctuationFound = getPunctuationType(token);
 
         // End chunk if a sentence-ending punctuation is found
-        if (punctuationType === 'sentence') {
+        if (punctuationFound === 'sentence') {
             break;
         }
 
         // End chunk if a clause-ending punctuation is found AND we have a reasonable number of words
         // Adjust the threshold (e.g., targetWordCount / 2) as needed
-        if (punctuationType === 'clause' && wordsInCurrentChunk >= Math.max(1, Math.ceil(targetWordCount / 2))) {
+        if (punctuationFound === 'clause' && wordsInCurrentChunk >= Math.max(1, Math.ceil(targetWordCount / 2))) {
             break;
         }
 
         // End chunk if we've reached or exceeded the target word count
-        if (wordsInCurrentChunk >= targetWordCount) {
-             // Optional: Look ahead slightly? Maybe not needed if punctuation handling is good.
+        // Only break here if no significant punctuation was found in *this* token
+        if (wordsInCurrentChunk >= targetWordCount && punctuationFound === 'none') {
+             // Optional: Could add lookahead here, but might complicate things.
+             // Let's stick to ending based on punctuation or word count for now.
             break;
         }
     }
@@ -80,10 +85,19 @@ const findChunkInfo = (
         }
     }
 
-     // Ensure at least one token is always included if possible
+     // Ensure at least one token is always included if possible, even if it exceeds target count slightly due to punctuation rule.
      const finalEndIndex = (endIndex === startIndex && startIndex < allTokens.length) ? startIndex + 1 : endIndex;
 
-    return { endIndex: finalEndIndex, actualWordsInChunk: actualWordsCount };
+    // Recalculate actual words for the *final* chunk
+    let finalActualWordsCount = 0;
+    for (let i = startIndex; i < finalEndIndex; i++) {
+        if (isActualWord(allTokens[i])) {
+            finalActualWordsCount++;
+        }
+    }
+
+
+    return { endIndex: finalEndIndex, actualWordsInChunk: finalActualWordsCount };
 };
 
 
@@ -127,18 +141,18 @@ export default function Home() {
        } else if (node.nodeType === Node.ELEMENT_NODE) {
            const element = node as HTMLElement;
            const tagName = element.tagName.toUpperCase();
-           const isBlock = ['P', 'DIV', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'LI', 'BLOCKQUOTE', 'PRE', 'HR', 'TABLE', 'TR', 'SECTION', 'ARTICLE', 'HEADER', 'FOOTER', 'ASIDE', 'NAV', 'UL', 'OL'].includes(tagName);
+           const isBlock = ['P', 'DIV', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'LI', 'BLOCKQUOTE', 'PRE', 'HR', 'TABLE', 'TR', 'SECTION', 'ARTICLE', 'HEADER', 'FOOTER', 'ASIDE', 'NAV', 'UL', 'OL', 'BODY'].includes(tagName);
             const isLineBreak = tagName === 'BR';
 
-           // Add double newline *before* processing children of a block element, if text exists
-           if (isBlock && currentText.length > 0 && !currentText.endsWith('\n\n')) {
-                currentText += currentText.endsWith('\n') ? '\n' : '\n\n';
+           // Add double newline *before* processing children of a block element, if text exists and not already ended with newline(s)
+           if (isBlock && currentText.length > 0 && !currentText.endsWith('\n')) {
+                currentText += '\n\n';
            }
 
            for (let i = 0; i < node.childNodes.length; i++) {
                 const childText = extractTextRecursive(node.childNodes[i]);
                 if (childText) {
-                    // Add space if needed before appending child text
+                    // Add space if needed before appending child text, avoid double spaces or space before punctuation
                     if (currentText.length > 0 && !/\s$/.test(currentText) && !/^\s/.test(childText) && !/^[.,!?;:]/.test(childText)) {
                         currentText += ' ';
                     }
@@ -146,9 +160,9 @@ export default function Home() {
                 }
            }
 
-            // Add double newline *after* processing children of a block element or BR
-            if ((isBlock || isLineBreak) && currentText.length > 0 && !currentText.endsWith('\n\n')) {
-                 currentText += currentText.endsWith('\n') ? '\n' : '\n\n';
+            // Add double newline *after* processing children of a block element or BR, if text exists and not already ended with newline(s)
+            if ((isBlock || isLineBreak) && currentText.length > 0 && !currentText.endsWith('\n')) {
+                 currentText += '\n\n';
            }
        }
        return currentText;
@@ -266,7 +280,15 @@ export default function Home() {
                 }
 
                  if (sectionText) {
-                     fullText += sectionText.trim() + '\n\n';
+                     // Add space before appending if necessary, and avoid double newlines from recursive function + here
+                    if (fullText.length > 0 && !fullText.endsWith('\n') && !sectionText.startsWith('\n')) {
+                      fullText += ' ';
+                    } else if (fullText.length > 0 && fullText.endsWith('\n\n') && sectionText.startsWith('\n\n')) {
+                      sectionText = sectionText.substring(2); // Remove duplicate double newline
+                    } else if (fullText.length > 0 && fullText.endsWith('\n') && sectionText.startsWith('\n') && !sectionText.startsWith('\n\n')) {
+                        sectionText = sectionText.substring(1); // Remove single duplicate newline
+                    }
+                     fullText += sectionText.trim(); // Trim section text before adding
                  } else {
                      console.warn(`Section ${item.idref || item.href} parsing yielded no text.`);
                  }
@@ -279,9 +301,10 @@ export default function Home() {
           }
           console.log(`Finished processing ${totalSections} sections with ${sectionErrors} errors.`);
 
-           fullText = fullText.replace(/[ \t]{2,}/g, ' ');
-           fullText = fullText.replace(/(\r\n|\r|\n)[ \t]*(\r\n|\r|\n)/g, '\n\n');
-           fullText = fullText.replace(/(\n\n){2,}/g, '\n\n');
+           // Post-processing cleanup
+           fullText = fullText.replace(/[ \t]{2,}/g, ' '); // Consolidate multiple spaces/tabs
+           fullText = fullText.replace(/(\r\n|\r|\n)[ \t]*(\r\n|\r|\n)/g, '\n\n'); // Normalize paragraph breaks
+           fullText = fullText.replace(/(\n\n){2,}/g, '\n\n'); // Consolidate multiple paragraph breaks
            fullText = fullText.trim();
            console.log(`Extracted text length (after cleanup): ${fullText.length}`);
 
@@ -359,7 +382,7 @@ export default function Home() {
       console.log(`Starting FileReader for ${file.name}...`);
       reader.readAsArrayBuffer(file);
     });
-   }, [toast, extractTextRecursive]);
+   }, [toast, dismiss, extractTextRecursive]); // Added extractTextRecursive dependency
 
 
   const handleFileUpload = useCallback(
@@ -382,8 +405,8 @@ export default function Home() {
       setActualWordCount(0);
       setIsAdjustingChunk(false);
 
-      const loadingToast = toast({ title: 'Loading File...', description: `Processing ${file.name}` });
-      const loadingToastId = loadingToast.id; // Store the ID
+      const { dismiss: dismissLoading, id: loadingToastId } = toast({ title: 'Loading File...', description: `Processing ${file.name}` });
+
 
       try {
          let fileContent = '';
@@ -416,7 +439,7 @@ export default function Home() {
              console.log("parseEpub completed.");
          } else if (lowerCaseName.endsWith('.mobi')) {
             console.warn("Unsupported file type: .mobi");
-            dismiss(loadingToastId); // Dismiss loading toast
+            dismissLoading(); // Dismiss loading toast
             toast({
              title: 'Unsupported Format',
              description: '.mobi files are not currently supported. Please try .txt or .epub.',
@@ -426,7 +449,7 @@ export default function Home() {
            return;
          } else {
             console.warn(`Unsupported file type: ${file.type} / ${file.name}`);
-            dismiss(loadingToastId); // Dismiss loading toast
+            dismissLoading(); // Dismiss loading toast
            toast({
              title: 'Unsupported File Type',
              description: `"${file.name}" is not a supported .txt or .epub file.`,
@@ -449,7 +472,7 @@ export default function Home() {
          console.log(`Counted ${wordCount} actual words.`);
 
          // Explicitly dismiss the loading toast *before* showing success/error
-         dismiss(loadingToastId);
+         dismissLoading();
 
 
          if (newTokens.length === 0 && fileContent.length > 0) {
@@ -483,7 +506,7 @@ export default function Home() {
       } catch (error: any) {
          console.error('Error during file processing or parsing:', error);
           // Dismiss loading toast first, then show error
-          dismiss(loadingToastId);
+          dismissLoading();
           toast({
            title: 'Error Loading File',
            description: error.message || 'An unexpected error occurred. Check console.',
@@ -501,19 +524,8 @@ export default function Home() {
         }
       }
     },
-    [parseEpub, toast, dismiss] // remove extractTextRecursive if not directly used here
+    [parseEpub, toast, dismiss] // Include dismiss from useToast
   );
-
-  // Function to find the index of the next punctuation based on the new logic
-  const findNextPunctuationIndex = useCallback((startIndex: number): number => {
-    for (let i = startIndex; i < tokens.length; i++) {
-      const type = getPunctuationType(tokens[i]);
-      if (type === 'sentence' || type === 'clause') {
-        return i; // Return index of the token ending with punctuation
-      }
-    }
-    return -1; // No punctuation found
-  }, [tokens]);
 
 
    // --- Punctuation and Delay Logic ---
@@ -527,11 +539,14 @@ export default function Home() {
        const previousToken = tokens[previousTokenIndex];
        const punctuationType = getPunctuationType(previousToken);
 
+        // Apply delay multiplier based on the punctuation at the end of the PREVIOUS chunk
        if (punctuationType === 'sentence') {
-           return { delayMultiplier: 2.0 }; // Double delay after sentence end
+           console.log("Applying x2 delay multiplier for sentence end.");
+           return { delayMultiplier: 2.0 }; // Double delay after ., !, ?
        }
        if (punctuationType === 'clause') {
-           return { delayMultiplier: 1.5 }; // 50% longer delay after clause end
+            console.log("Applying x1.5 delay multiplier for clause end.");
+           return { delayMultiplier: 1.5 }; // 50% longer delay after ,, ;, :
        }
 
        return { delayMultiplier: 1.0 }; // Default multiplier
