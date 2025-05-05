@@ -120,7 +120,7 @@ export function ReaderControls({
           type="file"
           ref={fileInputRef}
           onChange={onFileUpload}
-          accept=".txt,.epub"
+          accept=".txt,.epub" // Only accept .txt and .epub
           className="hidden"
         />
          {fileName && (

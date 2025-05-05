@@ -1,11 +1,12 @@
 
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { useToast } from '@/hooks/use-toast';
-import { isActualWord, calculatePivot } from '@/lib/readingUtils'; // Import isActualWord from readingUtils
+import { isActualWord } from '@/lib/readingUtils'; // Import from readingUtils using alias
 import { getPunctuationType } from '@/lib/punctuationUtils'; // Assuming this file exists and is correct
 import { findChunkInfo } from '@/lib/chunkingLogic';
 import { findPreviousChunkStart, findChunkStartForWordIndex } from '@/lib/chunkNavigation';
 import { parseEpub } from '@/lib/epub/epubParser'; // Use alias path
+import { calculatePivot } from '@/lib/pivotUtils'; // Import pivot calculation
 
 interface ToastController {
   id: string;
@@ -51,7 +52,7 @@ export function useReaderState() {
     const punctuationType = getPunctuationType(previousToken);
 
     if (punctuationType === 'sentence' || punctuationType === 'clause') {
-      return { delayMultiplier: 2.0 }; // Reduced pause multiplier to 2.0 (was 3.0)
+      return { delayMultiplier: 2.0 }; // Paus multiplier
     }
     return { delayMultiplier: 1.0 };
   }, [currentIndex, words]);
@@ -151,7 +152,7 @@ export function useReaderState() {
         let fileContent = '';
         const lowerCaseName = file.name.toLowerCase();
 
-        if (file.type === 'text/plain' || lowerCaseName.endsWith('.txt')) {
+        if (lowerCaseName.endsWith('.txt')) {
           console.log("Reading TXT file...");
           fileContent = await new Promise<string>((resolve, reject) => {
             const reader = new FileReader();
@@ -159,14 +160,15 @@ export function useReaderState() {
             reader.onerror = (e) => reject(new Error(`Error reading TXT: ${reader.error?.message || 'Unknown'}`));
             reader.readAsText(file);
           });
-        } else if (lowerCaseName.endsWith('.epub') || file.type === 'application/epub+zip') {
+        } else if (lowerCaseName.endsWith('.epub')) {
           console.log("Parsing EPUB file...");
-          // Pass toast and dismiss functions correctly
           fileContent = await parseEpub(file, toast, dismiss);
         } else if (lowerCaseName.endsWith('.mobi')) {
-           throw new Error(".mobi files are not supported. Please use .txt or .epub.");
+          // Explicitly reject .mobi files
+          throw new Error(".mobi files are not supported due to technical limitations. Please use .txt or .epub.");
         } else {
-           throw new Error(`Unsupported file type: "${file.name}". Please use .txt or .epub.`);
+          // Reject other unsupported types
+          throw new Error(`Unsupported file type: "${file.name}". Please use .txt or .epub.`);
         }
 
         console.log(`File content length: ${fileContent.length}`);
@@ -312,4 +314,3 @@ export function useReaderState() {
     canGoPrevious, // Expose navigation states
   };
 }
-

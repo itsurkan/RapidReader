@@ -12,9 +12,8 @@ const LOCAL_STORAGE_KEY_VALUE = 'rapidreader_background_value';
 // Default background images (using picsum placeholders)
 // Added data-ai-hint conceptually here, though it's applied in the component
 export const DEFAULT_IMAGES: Record<string, { url: string; hint: string }> = {
-  'default1': { url: 'https://picsum.photos/seed/bg1/1920/1080', hint: 'abstract texture' },
-  'default2': { url: 'https://picsum.photos/seed/bg2/1920/1080', hint: 'nature landscape' },
-  'default3': { url: 'https://picsum.photos/seed/bg3/1920/1080', hint: 'minimalist pattern' },
+  'default1': { url: 'https://png.pngtree.com/background/20210711/original/pngtree-read-more-books-on-campus-picture-image_1126340.jpg', hint: 'abstract book texture' },
+  'default2': { url: 'https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcRaFkmzL62dQu7KRjBI2TfnB5nyN4vXxjIofGNYr275ioWXxDvhyb13ELrf_HNJIzX0F-4&usqp=CAU', hint: 'building blocks' },
 };
 
 // Default to a texture-like image initially
@@ -40,11 +39,8 @@ export function useBackground() {
         if (['color', 'image', 'custom'].includes(storedType)) {
           setBackgroundType(storedType);
           setBackgroundValue(storedValue);
-           console.log(`[useBackground] Loaded from localStorage: type=${storedType}, value=${storedValue.substring(0, 60)}...`);
         } else {
           // Invalid type found, reset to default and clear storage
-          localStorage.removeItem(LOCAL_STORAGE_KEY_TYPE);
-          localStorage.removeItem(LOCAL_STORAGE_KEY_VALUE);
           setBackgroundType(DEFAULT_BACKGROUND_TYPE);
           setBackgroundValue(DEFAULT_BACKGROUND_VALUE);
            console.warn('[useBackground] Invalid type in localStorage, reset to default image.');
@@ -52,9 +48,6 @@ export function useBackground() {
       } else {
          console.log('[useBackground] No valid localStorage found, using default image background.');
         // No stored preference, state already initialized with defaults above
-        // Ensure defaults are saved if nothing was stored
-         localStorage.setItem(LOCAL_STORAGE_KEY_TYPE, DEFAULT_BACKGROUND_TYPE);
-         localStorage.setItem(LOCAL_STORAGE_KEY_VALUE, DEFAULT_BACKGROUND_VALUE);
       }
     } catch (error) {
       console.error("Error reading background preference from localStorage:", error);
@@ -72,11 +65,10 @@ export function useBackground() {
     if (!isInitialized || typeof window === 'undefined') return;
     // console.log(`[useBackground] Applying type: ${backgroundType}, value: ${backgroundValue.substring(0, 50)}...`);
 
-    const readingDisplay = document.querySelector('.reading-display') as HTMLElement | null;
+    const readingDisplay = document.querySelector('main') as HTMLElement | null;
 
     if (readingDisplay) {
       try { // Start try block
-        // Always reset common image properties when applying any style
         readingDisplay.style.backgroundImage = ''; // Reset any previous image
         readingDisplay.style.backgroundSize = '';
         readingDisplay.style.backgroundPosition = '';
@@ -84,10 +76,11 @@ export function useBackground() {
         readingDisplay.style.backgroundAttachment = '';
         readingDisplay.style.backgroundColor = 'transparent'; // Ensure it's always transparent
 
+
         if (backgroundType === 'color') {
           // Theme color is handled by CSS variables, set bg image to none
+          // mainElement.style.backgroundColor = 'var(--theme-background)'; // Example, actual color from CSS
           readingDisplay.style.backgroundImage = 'none';
-          console.log('[useBackground] Applied theme color background (cleared inline styles on reading-display).');
           localStorage.setItem(LOCAL_STORAGE_KEY_TYPE, 'color');
           localStorage.setItem(LOCAL_STORAGE_KEY_VALUE, ''); // Empty string signifies theme color
         } else if (backgroundType === 'image' || backgroundType === 'custom') {
@@ -109,8 +102,7 @@ export function useBackground() {
       } catch (error) { // Catch block immediately follows try
         console.error("Error applying background or saving to localStorage:", error);
       }
-    } else { // Else block corresponds to if (readingDisplay)
-      console.warn('[useBackground] .reading-display element not found. Cannot apply background styles.');
+    } else {
     }
   }, [backgroundType, backgroundValue, isInitialized]); // Re-run when type, value, or init state changes
 
