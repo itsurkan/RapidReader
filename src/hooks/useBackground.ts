@@ -72,40 +72,48 @@ export function useBackground() {
     if (!isInitialized || typeof window === 'undefined') return;
     // console.log(`[useBackground] Applying type: ${backgroundType}, value: ${backgroundValue.substring(0, 50)}...`);
 
-    try {
+    const readingDisplay = document.querySelector('.reading-display') as HTMLElement | null;
+
+    if (readingDisplay) {
+      try { // Start try block
         // Always reset common image properties when applying any style
-        document.body.style.backgroundSize = '';
-        document.body.style.backgroundPosition = '';
-        document.body.style.backgroundRepeat = '';
-        document.body.style.backgroundAttachment = '';
+        readingDisplay.style.backgroundImage = ''; // Reset any previous image
+        readingDisplay.style.backgroundSize = '';
+        readingDisplay.style.backgroundPosition = '';
+        readingDisplay.style.backgroundRepeat = '';
+        readingDisplay.style.backgroundAttachment = '';
+        readingDisplay.style.backgroundColor = 'transparent'; // Ensure it's always transparent
 
+        if (backgroundType === 'color') {
+          // Theme color is handled by CSS variables, set bg image to none
+          readingDisplay.style.backgroundImage = 'none';
+          console.log('[useBackground] Applied theme color background (cleared inline styles on reading-display).');
+          localStorage.setItem(LOCAL_STORAGE_KEY_TYPE, 'color');
+          localStorage.setItem(LOCAL_STORAGE_KEY_VALUE, ''); // Empty string signifies theme color
+        } else if (backgroundType === 'image' || backgroundType === 'custom') {
+          // Apply image styles
+          readingDisplay.style.backgroundImage = `url("${backgroundValue}")`;
+          readingDisplay.style.backgroundSize = 'cover';
+          readingDisplay.style.backgroundPosition = 'center center'; // Explicitly center
+          readingDisplay.style.backgroundRepeat = 'no-repeat';
+          readingDisplay.style.backgroundAttachment = 'fixed'; // Keep background fixed during scroll
 
-      if (backgroundType === 'color') {
-        // Theme color is handled by CSS variables, set bg image to none
-        document.body.style.backgroundImage = 'none';
-        document.body.style.backgroundColor = ''; // Reset inline color to let CSS class take over
-        console.log('[useBackground] Applied theme color background (cleared inline styles).');
-        localStorage.setItem(LOCAL_STORAGE_KEY_TYPE, 'color');
-        localStorage.setItem(LOCAL_STORAGE_KEY_VALUE, ''); // Empty string signifies theme color
-      } else if (backgroundType === 'image' || backgroundType === 'custom') {
-        // Apply image styles and make background color transparent
-        document.body.style.backgroundImage = `url("${backgroundValue}")`;
-        document.body.style.backgroundColor = 'transparent'; // Ensure image shows over any CSS color
-        document.body.style.backgroundSize = 'cover';
-        document.body.style.backgroundPosition = 'center center'; // Explicitly center
-        document.body.style.backgroundRepeat = 'no-repeat';
-        document.body.style.backgroundAttachment = 'fixed'; // Keep background fixed during scroll
+          // Note: backgroundColor is always transparent for images, handled above
 
-        // Save preference
-        localStorage.setItem(LOCAL_STORAGE_KEY_TYPE, backgroundType);
-        localStorage.setItem(LOCAL_STORAGE_KEY_VALUE, backgroundValue);
-         console.log(`[useBackground] Applied ${backgroundType} background:`, backgroundValue.substring(0, 60) + '...');
+          // Save preference
+          localStorage.setItem(LOCAL_STORAGE_KEY_TYPE, backgroundType);
+          localStorage.setItem(LOCAL_STORAGE_KEY_VALUE, backgroundValue);
+          console.log(`[useBackground] Applied ${backgroundType} background:`, backgroundValue.substring(0, 60) + '...');
+        }
+        //    console.log('[useBackground] Body style after update:', document.body.style.backgroundImage, document.body.style.backgroundColor);
+      } catch (error) { // Catch block immediately follows try
+        console.error("Error applying background or saving to localStorage:", error);
       }
-    //    console.log('[useBackground] Body style after update:', document.body.style.backgroundImage, document.body.style.backgroundColor);
-    } catch (error) {
-      console.error("Error applying background or saving to localStorage:", error);
+    } else { // Else block corresponds to if (readingDisplay)
+      console.warn('[useBackground] .reading-display element not found. Cannot apply background styles.');
     }
   }, [backgroundType, backgroundValue, isInitialized]); // Re-run when type, value, or init state changes
+
 
   const updateBackground = useCallback((type: BackgroundType, value: BackgroundValue) => {
     setBackgroundType(type);
